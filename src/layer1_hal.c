@@ -45,13 +45,15 @@ uint64_t layer1_get_last_hardware_heartbeat_ms(void)
     return s_last_hw_heartbeat_ms;
 }
 
-void layer1_display_flush_cb(const display_area_t *area, const uint32_t *color_p)
+extern void main_flush_strip_to_screen(const display_area_t *area, const uint8_t *color_p);
+
+void layer1_display_flush_cb(const display_area_t *area, const uint8_t *color_p)
 {
-    (void)area;
-    (void)color_p;
-    
     /* Signal Hardware Flush Heartbeat to Layer 2 Watchdog Supervisor */
     layer1_report_hardware_alive();
+
+    /* Flush strip buffer directly to Win32 display interface */
+    main_flush_strip_to_screen(area, color_p);
 }
 
 bool layer1_poll_button_event(input_key_t *key_out)

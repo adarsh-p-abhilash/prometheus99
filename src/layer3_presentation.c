@@ -9,42 +9,60 @@
 #include "../include/layer2_core.h"
 #include "../include/lvgl.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-/* --- Static Framebuffer (Zero Dynamic Memory Allocation) --- */
-static uint32_t s_framebuffer[DISPLAY_WIDTH * DISPLAY_HEIGHT];
+/* --- Static Strip Buffer (Zero Dynamic Memory Allocation - 12 KB for 16-Strip 4-Bit Renderer) --- */
+static uint8_t s_strip_buffer[DISPLAY_BUF_SIZE];
+static int s_current_strip_y = 0;
 
-/* --- Default & High-Contrast HMI Themes --- */
+/* --- Default & High-Contrast HMI Themes (4-Bit Palette Indices) --- */
 static hmi_theme_t s_theme_dark = {
-    .bg_color         = 0xFF0B101D, /* Deep space navy */
-    .card_bg          = 0xFF161F33, /* Dark slate card background */
-    .primary_accent   = 0xFF00D2FF, /* Cyan glowing accent */
-    .secondary_accent = 0xFF3B82F6, /* Electric blue */
-    .text_primary     = 0xFFF8FAFC, /* Bright crisp white */
-    .text_secondary   = 0xFF94A3B8, /* Cool grey */
-    .alarm_critical   = 0xFFEF4444, /* Crimson red */
-    .alarm_ok         = 0xFF10B981, /* Emerald green */
+    .bg_color         = 1,  /* Dark Navy */
+    .card_bg          = 2,  /* Slate Card */
+    .primary_accent   = 6,  /* Cyan Glowing Accent */
+    .secondary_accent = 5,  /* Electric Blue */
+    .text_primary     = 15, /* Bright Crisp White */
+    .text_secondary   = 13, /* Cool Grey */
+    .alarm_critical   = 9,  /* Crimson Red */
+    .alarm_ok         = 7,  /* Emerald Green */
     .is_high_contrast = false
 };
 
 static hmi_theme_t s_theme_contrast = {
-    .bg_color         = 0xFF000000, /* Pure black */
-    .card_bg          = 0xFF1A1A1A, /* High contrast dark grey card */
-    .primary_accent   = 0xFFFFFF00, /* Vibrant yellow */
-    .secondary_accent = 0xFF00FFFF, /* Bright cyan */
-    .text_primary     = 0xFFFFFFFF, /* High contrast white */
-    .text_secondary   = 0xFFE0E0E0, /* Light grey */
-    .alarm_critical   = 0xFFFF0000, /* Bright red */
-    .alarm_ok         = 0xFF00FF00, /* Bright green */
+    .bg_color         = 0,  /* Pure Black */
+    .card_bg          = 2,  /* High Contrast Slate Card */
+    .primary_accent   = 12, /* Vibrant Yellow */
+    .secondary_accent = 6,  /* Bright Cyan */
+    .text_primary     = 15, /* High Contrast White */
+    .text_secondary   = 14, /* Light Grey */
+    .alarm_critical   = 10, /* Bright Red */
+    .alarm_ok         = 8,  /* Bright Green */
     .is_high_contrast = true
 };
 
 static const hmi_theme_t *s_active_theme = &s_theme_dark;
 
-/* --- Software Graphics Drawing Helpers (Pure C99) --- */
-static void draw_rect(int x, int y, int w, int h, uint32_t color)
+/* --- Software Graphics Drawing Helpers (Pure C99 4-Bit Strip Renderer) --- */
+static inline void set_pixel_4bpp(int x, int y, uint8_t color)
 {
-    if (x >= DISPLAY_WIDTH || y >= DISPLAY_HEIGHT) return;
+    if (x < 0 || x >= DISPLAY_WIDTH) return;
+    if (y < s_current_strip_y || y >= (s_current_strip_y + STRIP_HEIGHT)) return;
+    int local_y = y - s_current_strip_y;
+    int pos = local_y * DISPLAY_WIDTH + x;
+    int idx = pos >> 1;
+    color &= 0x0F;
+    if (pos & 1) {
+        s_strip_buffer[idx] = (s_strip_buffer[idx] & 0xF0) | color;
+    } else {
+        s_strip_buffer[idx] = (s_strip_buffer[idx] & 0x0F) | (color << 4);
+    }
+}
+
+static void draw_rect(int x, int y, int w, int h, uint8_t color)
+{
+    color &= 0x0F;
+    if (x >= DISPLAY_WIDTH || y >= DISPLAY_HEIGHT || w <= 0 || h <= 0) return;
     int x2 = x + w;
     int y2 = y + h;
     if (x < 0) x = 0;
@@ -52,15 +70,31 @@ static void draw_rect(int x, int y, int w, int h, uint32_t color)
     if (x2 > DISPLAY_WIDTH) x2 = DISPLAY_WIDTH;
     if (y2 > DISPLAY_HEIGHT) y2 = DISPLAY_HEIGHT;
 
-    for (int py = y; py < y2; py++) {
-        uint32_t *row = &s_framebuffer[py * DISPLAY_WIDTH];
+    int sy1 = s_current_strip_y;
+    int sy2 = s_current_strip_y + STRIP_HEIGHT;
+
+    /* Clip to active strip bounds */
+    if (y2 <= sy1 || y >= sy2) return;
+
+    int py1 = (y < sy1) ? sy1 : y;
+    int py2 = (y2 > sy2) ? sy2 : y2;
+
+    for (int py = py1; py < py2; py++) {
+        int local_y = py - sy1;
+        int row_start = local_y * DISPLAY_WIDTH;
         for (int px = x; px < x2; px++) {
-            row[px] = color;
+            int pos = row_start + px;
+            int idx = pos >> 1;
+            if (pos & 1) {
+                s_strip_buffer[idx] = (s_strip_buffer[idx] & 0xF0) | color;
+            } else {
+                s_strip_buffer[idx] = (s_strip_buffer[idx] & 0x0F) | (color << 4);
+            }
         }
     }
 }
 
-static void draw_border_rect(int x, int y, int w, int h, uint32_t fill_color, uint32_t border_color, int border_thick)
+static void draw_border_rect(int x, int y, int w, int h, uint8_t fill_color, uint8_t border_color, int border_thick)
 {
     draw_rect(x, y, w, h, border_color);
     draw_rect(x + border_thick, y + border_thick, w - 2 * border_thick, h - 2 * border_thick, fill_color);
@@ -165,7 +199,91 @@ static const uint8_t font5x7[128][5] = {
     ['~'] = {0x02, 0x01, 0x02, 0x04, 0x02}
 };
 
-static void draw_char(int x, int y, char c, uint32_t color, int scale)
+/* --- Tiny C99 Fast String Formatters (Zero CRT Float Stdio Overhead) --- */
+static void fast_fmt_uint(char *buf, uint32_t val)
+{
+    char temp[16];
+    int i = 0;
+    if (val == 0) {
+        temp[i++] = '0';
+    } else {
+        while (val > 0 && i < 15) {
+            temp[i++] = '0' + (val % 10);
+            val /= 10;
+        }
+    }
+    while (i > 0) {
+        *buf++ = temp[--i];
+    }
+    *buf = '\0';
+}
+
+static void fast_fmt_hex32(char *buf, uint32_t val)
+{
+    const char hex_chars[] = "0123456789ABCDEF";
+    buf[0] = '0'; buf[1] = 'x';
+    for (int i = 7; i >= 0; i--) {
+        buf[2 + i] = hex_chars[val & 0x0F];
+        val >>= 4;
+    }
+    buf[10] = '\0';
+}
+
+static void fast_fmt_hex16(char *buf, uint16_t val)
+{
+    const char hex_chars[] = "0123456789ABCDEF";
+    buf[0] = '0'; buf[1] = 'x';
+    for (int i = 3; i >= 0; i--) {
+        buf[2 + i] = hex_chars[val & 0x0F];
+        val >>= 4;
+    }
+    buf[6] = '\0';
+}
+
+static __attribute__((unused)) void fast_fmt_float1(char *buf, float val, const char *suffix)
+{
+    if (val < 0.0f) val = 0.0f;
+    uint32_t int_part = (uint32_t)val;
+    uint32_t dec_part = (uint32_t)((val - (float)int_part) * 10.0f + 0.5f);
+    if (dec_part >= 10) { int_part++; dec_part = 0; }
+    
+    char ibuf[16];
+    fast_fmt_uint(ibuf, int_part);
+    
+    char *p = buf;
+    char *s = ibuf;
+    while (*s) *p++ = *s++;
+    *p++ = '.';
+    *p++ = '0' + (dec_part % 10);
+    if (suffix) {
+        while (*suffix) *p++ = *suffix++;
+    }
+    *p = '\0';
+}
+
+static void fast_fmt_float2(char *buf, float val, const char *suffix)
+{
+    if (val < 0.0f) val = 0.0f;
+    uint32_t int_part = (uint32_t)val;
+    uint32_t dec_part = (uint32_t)((val - (float)int_part) * 100.0f + 0.5f);
+    if (dec_part >= 100) { int_part++; dec_part = 0; }
+
+    char ibuf[16];
+    fast_fmt_uint(ibuf, int_part);
+
+    char *p = buf;
+    char *s = ibuf;
+    while (*s) *p++ = *s++;
+    *p++ = '.';
+    *p++ = '0' + ((dec_part / 10) % 10);
+    *p++ = '0' + (dec_part % 10);
+    if (suffix) {
+        while (*suffix) *p++ = *suffix++;
+    }
+    *p = '\0';
+}
+
+static void draw_char(int x, int y, char c, uint8_t color, int scale)
 {
     unsigned char uc = (unsigned char)c;
     if (uc > 127) {
@@ -189,7 +307,7 @@ static void draw_char(int x, int y, char c, uint32_t color, int scale)
     }
 }
 
-static void draw_text(int x, int y, const char *str, uint32_t color, int scale)
+static void draw_text(int x, int y, const char *str, uint8_t color, int scale)
 {
     if (!str) return;
     int cur_x = x;
@@ -200,7 +318,7 @@ static void draw_text(int x, int y, const char *str, uint32_t color, int scale)
     }
 }
 
-static void draw_progress_bar(int x, int y, int w, int h, float percent, uint32_t fill_color, uint32_t bg_color)
+static void draw_progress_bar(int x, int y, int w, int h, float percent, uint8_t fill_color, uint8_t bg_color)
 {
     draw_border_rect(x, y, w, h, bg_color, s_active_theme->secondary_accent, 1);
     if (percent < 0.0f) percent = 0.0f;
@@ -225,13 +343,13 @@ static void draw_hmi_header(const char *screen_title, const shared_state_buffer_
     draw_text(190, 15, screen_title, s_active_theme->text_primary, 1);
 
     /* Watchdog Health Pill */
-    uint32_t wd_color = wd->system_healthy ? s_active_theme->alarm_ok : s_active_theme->alarm_critical;
+    uint8_t wd_color = wd->system_healthy ? s_active_theme->alarm_ok : s_active_theme->alarm_critical;
     draw_border_rect(540, 9, 95, 24, wd_color, s_active_theme->text_primary, 1);
-    draw_text(552, 14, wd->system_healthy ? "WD: OK" : "WD: TRIP", 0xFF000000, 1);
+    draw_text(552, 14, wd->system_healthy ? "WD: OK" : "WD: TRIP", 0x00, 1);
 
     /* Heartbeat Frame Counter Badge */
-    char hb_buf[32];
-    snprintf(hb_buf, sizeof(hb_buf), "FRAME: %lu", (unsigned long)state->heartbeat_counter);
+    char hb_buf[32] = "FRAME: ";
+    fast_fmt_uint(hb_buf + 7, (uint32_t)state->heartbeat_counter);
     draw_text(650, 15, hb_buf, s_active_theme->text_secondary, 1);
 
     /* Bottom Navigation Bar */
@@ -239,48 +357,53 @@ static void draw_hmi_header(const char *screen_title, const shared_state_buffer_
     draw_rect(0, DISPLAY_HEIGHT - 38, DISPLAY_WIDTH, 1, s_active_theme->secondary_accent);
 
     screen_id_t active = (screen_id_t)state->active_screen;
-    draw_border_rect(10, DISPLAY_HEIGHT - 32, 110, 26, (active == SCREEN_BOOT) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(47, DISPLAY_HEIGHT - 23, "1:BOOT", (active == SCREEN_BOOT) ? 0xFF000000 : s_active_theme->text_primary, 1);
+    draw_border_rect(10, DISPLAY_HEIGHT - 32, 140, 26, (active == SCREEN_DASHBOARD) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
+    draw_text(35, DISPLAY_HEIGHT - 23, "1:DASHBOARD", (active == SCREEN_DASHBOARD) ? 0x00 : s_active_theme->text_primary, 1);
 
-    draw_border_rect(130, DISPLAY_HEIGHT - 32, 110, 26, (active == SCREEN_DASHBOARD) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(152, DISPLAY_HEIGHT - 23, "2:DASHBOARD", (active == SCREEN_DASHBOARD) ? 0xFF000000 : s_active_theme->text_primary, 1);
+    draw_border_rect(160, DISPLAY_HEIGHT - 32, 140, 26, (active == SCREEN_DIAGNOSTICS) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
+    draw_text(185, DISPLAY_HEIGHT - 23, "2:DIAGNOST", (active == SCREEN_DIAGNOSTICS) ? 0x00 : s_active_theme->text_primary, 1);
 
-    draw_border_rect(250, DISPLAY_HEIGHT - 32, 110, 26, (active == SCREEN_DIAGNOSTICS) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(275, DISPLAY_HEIGHT - 23, "3:DIAGNOST", (active == SCREEN_DIAGNOSTICS) ? 0xFF000000 : s_active_theme->text_primary, 1);
+    draw_border_rect(310, DISPLAY_HEIGHT - 32, 140, 26, (active == SCREEN_ALARM) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
+    draw_text(348, DISPLAY_HEIGHT - 23, "3:ALARM", (active == SCREEN_ALARM) ? 0x00 : s_active_theme->text_primary, 1);
 
-    draw_border_rect(370, DISPLAY_HEIGHT - 32, 110, 26, (active == SCREEN_ALARM) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(404, DISPLAY_HEIGHT - 23, "4:ALARM", (active == SCREEN_ALARM) ? 0xFF000000 : s_active_theme->text_primary, 1);
+    draw_border_rect(460, DISPLAY_HEIGHT - 32, 140, 26, (active == SCREEN_SETTINGS) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
+    draw_text(488, DISPLAY_HEIGHT - 23, "4:SETTINGS", (active == SCREEN_SETTINGS) ? 0x00 : s_active_theme->text_primary, 1);
 
-    draw_border_rect(490, DISPLAY_HEIGHT - 32, 110, 26, (active == SCREEN_SETTINGS) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(515, DISPLAY_HEIGHT - 23, "5:SETTINGS", (active == SCREEN_SETTINGS) ? 0xFF000000 : s_active_theme->text_primary, 1);
-
-    draw_border_rect(610, DISPLAY_HEIGHT - 32, 110, 26, (active == SCREEN_FAILOVER_STANDBY) ? s_active_theme->alarm_critical : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(635, DISPLAY_HEIGHT - 23, "6:FAILOVER", (active == SCREEN_FAILOVER_STANDBY) ? 0xFFFFFFFF : s_active_theme->text_primary, 1);
+    draw_border_rect(610, DISPLAY_HEIGHT - 32, 140, 26, (active == SCREEN_FAILOVER_STANDBY) ? s_active_theme->alarm_critical : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
+    draw_text(638, DISPLAY_HEIGHT - 23, "5:FAILOVER", (active == SCREEN_FAILOVER_STANDBY) ? 0xFF : s_active_theme->text_primary, 1);
 }
 
 /* --- Pre-Allocated Screen Renders --- */
 
-static void render_screen_boot(const shared_state_buffer_t *state, const watchdog_supervisor_t *wd)
+
+
+static void draw_line(int x1, int y1, int x2, int y2, uint8_t color, int thick)
 {
-    (void)wd;
-    draw_hmi_header("BOOT SEQUENCE", state, wd);
+    int dx = abs(x2 - x1), sx = x1 < x2 ? 1 : -1;
+    int dy = -abs(y2 - y1), sy = y1 < y2 ? 1 : -1;
+    int err = dx + dy, e2;
 
-    draw_border_rect(150, 80, 500, 310, s_active_theme->card_bg, s_active_theme->primary_accent, 2);
-
-    draw_text(220, 110, "PROMETHEUS99 HMI RUNTIME", s_active_theme->primary_accent, 2);
-    draw_text(240, 140, "C99 + LVGL SAFE ARCHITECTURE", s_active_theme->text_secondary, 1);
-
-    draw_text(180, 180, "[OK] Static Memory Pool Alloc: 0 Dynamic Bytes", s_active_theme->alarm_ok, 1);
-    draw_text(180, 205, "[OK] Dual-Loop Watchdog Supervisor: ACTIVE", s_active_theme->alarm_ok, 1);
-    draw_text(180, 230, "[OK] 1000 Hz Sensor ISR Pipeline: RUNNING", s_active_theme->alarm_ok, 1);
-    draw_text(180, 255, "[OK] Binary Telemetry Serializer: READY", s_active_theme->alarm_ok, 1);
-
-    float progress = ((float)(state->heartbeat_counter % 100)) / 100.0f;
-    draw_text(180, 295, "SYSTEM INITIALIZATION PROGRESS:", s_active_theme->text_primary, 1);
-    draw_progress_bar(180, 315, 440, 20, progress, s_active_theme->primary_accent, s_active_theme->bg_color);
-
-    draw_text(210, 350, "PRESS [NEXT / KEY 2] TO ENTER DASHBOARD", s_active_theme->primary_accent, 1);
+    while (1) {
+        for (int tx = 0; tx < thick; tx++) {
+            for (int ty = 0; ty < thick; ty++) {
+                set_pixel_4bpp(x1 + tx, y1 + ty, color);
+            }
+        }
+        if (x1 == x2 && y1 == y2) break;
+        e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x1 += sx; }
+        if (e2 <= dx) { err += dx; y1 += sy; }
+    }
 }
+
+/* --- Real-Time Chart Waveform History --- */
+#define CHART_HISTORY_LEN 50
+static float s_temp_history[CHART_HISTORY_LEN];
+static size_t s_history_count = 0;
+
+#define CPU_HISTORY_LEN 24
+static float s_cpu_history[CPU_HISTORY_LEN];
+static size_t s_cpu_history_count = 0;
 
 static void render_screen_dashboard(const shared_state_buffer_t *state, const watchdog_supervisor_t *wd)
 {
@@ -288,60 +411,135 @@ static void render_screen_dashboard(const shared_state_buffer_t *state, const wa
 
     char val_buf[64];
 
-    /* Card 1: Temperature Sensor */
+    /* Card 1: CPU Thermal / Load */
     draw_border_rect(20, 55, 235, 175, s_active_theme->card_bg, s_active_theme->primary_accent, 1);
-    draw_text(35, 70, "TEMPERATURE", s_active_theme->primary_accent, 2);
+    draw_text(35, 70, "CPU THERMAL", s_active_theme->primary_accent, 2);
     float temp_C = state->sensor_temp_mC / 1000.0f;
-    snprintf(val_buf, sizeof(val_buf), "%.2f C", temp_C);
+    fast_fmt_float2(val_buf, temp_C, " C");
     draw_text(35, 105, val_buf, s_active_theme->text_primary, 3);
-    float temp_pct = (temp_C - 20.0f) / 60.0f;
-    draw_progress_bar(35, 155, 205, 16, temp_pct, (temp_C > 55.0f) ? s_active_theme->alarm_critical : s_active_theme->alarm_ok, s_active_theme->bg_color);
-    draw_text(35, 180, "NORMAL RANGE: 20.0 - 55.0 C", s_active_theme->text_secondary, 1);
+    float temp_pct = (temp_C - 20.0f) / 40.0f;
+    draw_progress_bar(35, 155, 205, 16, temp_pct, (temp_C > 45.0f) ? s_active_theme->alarm_critical : s_active_theme->alarm_ok, s_active_theme->bg_color);
+    draw_text(35, 180, (temp_C > 45.0f) ? "ALARM: CPU TEMP > 45.0 C!" : "CPU ALARM LIMIT: 45.0 C", (temp_C > 45.0f) ? s_active_theme->alarm_critical : s_active_theme->text_secondary, 1);
 
-    /* Card 2: Fieldbus Pressure */
+    /* Card 2: Host RAM Utilization */
     draw_border_rect(275, 55, 245, 175, s_active_theme->card_bg, s_active_theme->primary_accent, 1);
-    draw_text(290, 70, "PRESSURE", s_active_theme->primary_accent, 2);
-    float press_kPa = state->sensor_pressure_kPa / 10.0f;
-    snprintf(val_buf, sizeof(val_buf), "%.1f kPa", press_kPa);
+    draw_text(290, 70, "HOST RAM LOAD", s_active_theme->primary_accent, 2);
+    uint32_t ram_pct = state->sensor_pressure_kPa;
+    fast_fmt_uint(val_buf, ram_pct);
+    strcat(val_buf, " %");
     draw_text(290, 105, val_buf, s_active_theme->text_primary, 3);
-    float press_pct = (press_kPa - 90.0f) / 50.0f;
+    float press_pct = ((float)ram_pct) / 100.0f;
     draw_progress_bar(290, 155, 215, 16, press_pct, s_active_theme->secondary_accent, s_active_theme->bg_color);
-    draw_text(290, 180, "NOMINAL: 100.0 - 125.0 kPa", s_active_theme->text_secondary, 1);
+    draw_text(290, 180, "WIN32 GLOBAL MEMORY LOAD", s_active_theme->text_secondary, 1);
 
-    /* Card 3: Motor RPM */
+    /* Card 3: System Threads */
     draw_border_rect(540, 55, 240, 175, s_active_theme->card_bg, s_active_theme->primary_accent, 1);
-    draw_text(555, 70, "MOTOR RPM", s_active_theme->primary_accent, 2);
-    snprintf(val_buf, sizeof(val_buf), "%lu RPM", (unsigned long)state->sensor_rpm);
+    draw_text(555, 70, "SYSTEM THREADS", s_active_theme->primary_accent, 2);
+    fast_fmt_uint(val_buf, (uint32_t)state->sensor_rpm);
+    strcat(val_buf, " THRDS");
     draw_text(555, 105, val_buf, s_active_theme->text_primary, 3);
-    float rpm_pct = ((float)state->sensor_rpm) / 4000.0f;
+    float rpm_pct = ((float)state->sensor_rpm) / 5000.0f;
+    if (rpm_pct > 1.0f) rpm_pct = 1.0f;
     draw_progress_bar(555, 155, 210, 16, rpm_pct, s_active_theme->primary_accent, s_active_theme->bg_color);
-    draw_text(555, 180, "MAX RATED: 4000 RPM", s_active_theme->text_secondary, 1);
+    draw_text(555, 180, "ACTIVE HOST OS THREADS", s_active_theme->text_secondary, 1);
 
-    /* Lower Section: Fieldbus Voltage & Telemetry Analytics */
+    /* Lower Left Section: Realtime Telemetry Waveform Line Chart */
     draw_border_rect(20, 245, 500, 185, s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(35, 260, "FIELDBUS VOLTAGE & TELEMETRY", s_active_theme->primary_accent, 2);
+    draw_text(35, 256, "REALTIME TELEMETRY WAVEFORM (30 Hz)", s_active_theme->primary_accent, 1);
+    
     float bus_V = state->sensor_bus_mv / 1000.0f;
-    snprintf(val_buf, sizeof(val_buf), "BUS VOLTAGE: %.3f V", bus_V);
-    draw_text(35, 295, val_buf, s_active_theme->text_primary, 2);
+    char bbuf[16], tbuf[16];
+    fast_fmt_float2(bbuf, bus_V, "V");
+    fast_fmt_float2(tbuf, temp_C, " C");
+    strcpy(val_buf, "BUS: ");
+    strcat(val_buf, bbuf);
+    strcat(val_buf, " | LIVE: ");
+    strcat(val_buf, tbuf);
+    draw_text(325, 256, val_buf, s_active_theme->alarm_ok, 1);
 
-    snprintf(val_buf, sizeof(val_buf), "SENSOR ISR FREQ: 1000 Hz | UI TIMER: 30 Hz");
-    draw_text(35, 330, val_buf, s_active_theme->text_secondary, 1);
+    /* Chart Frame & Grid Lines */
+    int chart_x = 40;
+    int chart_y = 275;
+    int chart_w = 465;
+    int chart_h = 145;
+    draw_rect(chart_x, chart_y, chart_w, chart_h, 1);
+    draw_border_rect(chart_x, chart_y, chart_w, chart_h, 1, s_active_theme->secondary_accent, 1);
 
-    snprintf(val_buf, sizeof(val_buf), "SERIALIZATION: PACKED C99 BINARY (CRC16)");
-    draw_text(35, 355, val_buf, s_active_theme->alarm_ok, 1);
+    /* Grid Horizontal Lines & Y-Axis Labels */
+    uint8_t grid_color = 3;
+    draw_rect(chart_x, chart_y + 35, chart_w, 1, grid_color);
+    draw_text(chart_x + 4, chart_y + 27, "55C", s_active_theme->text_secondary, 1);
 
-    snprintf(val_buf, sizeof(val_buf), "FRAGMENTATION: 0%% (STATIC ALLOCATION)");
-    draw_text(35, 380, val_buf, s_active_theme->primary_accent, 1);
+    draw_rect(chart_x, chart_y + 70, chart_w, 1, grid_color);
+    draw_text(chart_x + 4, chart_y + 62, "40C", s_active_theme->text_secondary, 1);
 
-    /* Watchdog Health Card */
-    draw_border_rect(540, 245, 240, 185, s_active_theme->card_bg, wd->system_healthy ? s_active_theme->alarm_ok : s_active_theme->alarm_critical, 1);
-    draw_text(555, 260, "DUAL-LOOP WATCHDOG", wd->system_healthy ? s_active_theme->alarm_ok : s_active_theme->alarm_critical, 2);
-    draw_text(555, 295, wd->hw_loop_alive ? "HW LOOP (1000Hz): ALIVE" : "HW LOOP: SILENT", wd->hw_loop_alive ? s_active_theme->alarm_ok : s_active_theme->alarm_critical, 1);
-    draw_text(555, 320, wd->sw_loop_alive ? "SW LOOP (30Hz): ALIVE" : "SW LOOP: SILENT", wd->sw_loop_alive ? s_active_theme->alarm_ok : s_active_theme->alarm_critical, 1);
-    snprintf(val_buf, sizeof(val_buf), "TOTAL PETS: %lu", (unsigned long)wd->total_watchdog_pets);
-    draw_text(555, 350, val_buf, s_active_theme->text_secondary, 1);
-    snprintf(val_buf, sizeof(val_buf), "FAULTS DETECTED: %lu", (unsigned long)wd->watchdog_fault_count);
-    draw_text(555, 375, val_buf, (wd->watchdog_fault_count > 0) ? s_active_theme->alarm_critical : s_active_theme->text_secondary, 1);
+    draw_rect(chart_x, chart_y + 105, chart_w, 1, grid_color);
+    draw_text(chart_x + 4, chart_y + 97, "25C", s_active_theme->text_secondary, 1);
+
+    /* Render Realtime Waveform Line Graph */
+    if (s_history_count > 1) {
+        int prev_px = 0, prev_py = 0;
+        for (size_t i = 0; i < s_history_count; i++) {
+            float val = s_temp_history[i];
+            if (val < 20.0f) val = 20.0f;
+            if (val > 65.0f) val = 65.0f;
+
+            float norm = (val - 20.0f) / 45.0f;
+            int px = chart_x + (int)((i * (chart_w - 10)) / (CHART_HISTORY_LEN - 1)) + 5;
+            int py = (chart_y + chart_h - 10) - (int)(norm * (chart_h - 20));
+
+            if (i > 0) {
+                draw_line(prev_px, prev_py, px, py, s_active_theme->primary_accent, 2);
+            }
+            /* Render vertex point dot */
+            draw_rect(px - 1, py - 1, 3, 3, (val > 55.0f) ? s_active_theme->alarm_critical : s_active_theme->alarm_ok);
+
+            prev_px = px;
+            prev_py = py;
+        }
+    }
+
+    /* Card 4: CPU Usage Visualization (Replaces Dual-Loop Watchdog) */
+    float cpu_load = layer0_get_host_cpu_load();
+    uint8_t cpu_color = (cpu_load > 85.0f) ? s_active_theme->alarm_critical : ((cpu_load > 50.0f) ? s_active_theme->secondary_accent : s_active_theme->alarm_ok);
+    draw_border_rect(540, 245, 240, 185, s_active_theme->card_bg, cpu_color, 1);
+    draw_text(555, 258, "CPU USAGE", cpu_color, 2);
+
+    /* Big Load Percentage */
+    fast_fmt_float2(val_buf, cpu_load, "%");
+    draw_text(555, 288, val_buf, s_active_theme->text_primary, 3);
+
+    /* CPU Progress Bar */
+    float norm_cpu = cpu_load / 100.0f;
+    if (norm_cpu < 0.0f) norm_cpu = 0.0f;
+    if (norm_cpu > 1.0f) norm_cpu = 1.0f;
+    draw_progress_bar(555, 323, 210, 14, norm_cpu, cpu_color, s_active_theme->bg_color);
+
+    /* CPU Load History Mini Bar Chart (x: 555..765, y: 345..388) */
+    int spark_x = 555;
+    int spark_y = 345;
+    int spark_w = 210;
+    int spark_h = 43;
+    draw_rect(spark_x, spark_y, spark_w, spark_h, 1);
+    draw_border_rect(spark_x, spark_y, spark_w, spark_h, 1, s_active_theme->secondary_accent, 1);
+
+    if (s_cpu_history_count > 0) {
+        int bar_w = (spark_w - 6) / CPU_HISTORY_LEN;
+        if (bar_w < 2) bar_w = 2;
+        for (size_t i = 0; i < s_cpu_history_count; i++) {
+            float val = s_cpu_history[i];
+            float h_ratio = val / 100.0f;
+            if (h_ratio < 0.05f) h_ratio = 0.05f;
+            if (h_ratio > 1.0f) h_ratio = 1.0f;
+            int bh = (int)(h_ratio * (spark_h - 4));
+            int bx = spark_x + 3 + (int)(i * bar_w);
+            int by = (spark_y + spark_h - 2) - bh;
+            uint8_t c = (val > 85.0f) ? s_active_theme->alarm_critical : ((val > 50.0f) ? s_active_theme->secondary_accent : s_active_theme->alarm_ok);
+            draw_rect(bx, by, bar_w - 1, bh, c);
+        }
+    }
+
+    draw_text(555, 403, "HOST PROCESSOR LOAD (LIVE)", s_active_theme->text_secondary, 1);
 }
 
 static void render_screen_diagnostics(const shared_state_buffer_t *state, const watchdog_supervisor_t *wd)
@@ -352,32 +550,47 @@ static void render_screen_diagnostics(const shared_state_buffer_t *state, const 
     draw_text(35, 70, "SHARED STATE BUFFER BINARY PACKET INSPECTOR", s_active_theme->primary_accent, 2);
 
     char buf[128];
-    snprintf(buf, sizeof(buf), "MAGIC HEADER: 0x%08X (PROM)", (unsigned int)state->magic_header);
+    strcpy(buf, "MAGIC HEADER: ");
+    fast_fmt_hex32(buf + strlen(buf), (uint32_t)state->magic_header);
+    strcat(buf, " (PROM)");
     draw_text(35, 110, buf, s_active_theme->text_primary, 1);
 
-    snprintf(buf, sizeof(buf), "TIMESTAMP MS: %llu ms", (unsigned long long)state->timestamp_ms);
+    strcpy(buf, "TIMESTAMP MS: ");
+    fast_fmt_uint(buf + strlen(buf), (uint32_t)state->timestamp_ms);
+    strcat(buf, " ms");
     draw_text(35, 135, buf, s_active_theme->text_primary, 1);
 
-    snprintf(buf, sizeof(buf), "RAW TEMP mC: %lu | RAW PRESS kPa: %lu | RAW RPM: %lu | BUS mV: %lu",
-             (unsigned long)state->sensor_temp_mC, (unsigned long)state->sensor_pressure_kPa,
-             (unsigned long)state->sensor_rpm, (unsigned long)state->sensor_bus_mv);
+    strcpy(buf, "RAW TEMP mC: ");
+    fast_fmt_uint(buf + strlen(buf), (uint32_t)state->sensor_temp_mC);
+    strcat(buf, " | RAW RAM LOAD %: ");
+    fast_fmt_uint(buf + strlen(buf), (uint32_t)state->sensor_pressure_kPa);
+    strcat(buf, " | RAW THREADS: ");
+    fast_fmt_uint(buf + strlen(buf), (uint32_t)state->sensor_rpm);
+    strcat(buf, " | BUS mV: ");
+    fast_fmt_uint(buf + strlen(buf), (uint32_t)state->sensor_bus_mv);
     draw_text(35, 160, buf, s_active_theme->text_primary, 1);
 
-    snprintf(buf, sizeof(buf), "DIRTY FLAG: %d | ALARM SEVERITY: %d | ACTIVE SCREEN ID: %d",
-             state->dirty_flag, state->alarm_severity, state->active_screen);
+    strcpy(buf, "DIRTY FLAG: ");
+    fast_fmt_uint(buf + strlen(buf), (uint32_t)state->dirty_flag);
+    strcat(buf, " | ALARM SEVERITY: ");
+    fast_fmt_uint(buf + strlen(buf), (uint32_t)state->alarm_severity);
+    strcat(buf, " | ACTIVE SCREEN ID: ");
+    fast_fmt_uint(buf + strlen(buf), (uint32_t)state->active_screen);
     draw_text(35, 185, buf, s_active_theme->primary_accent, 1);
 
-    snprintf(buf, sizeof(buf), "FRAME COUNTER: %lu | CRC16 CHECKSUM: 0x%04X",
-             (unsigned long)state->heartbeat_counter, state->checksum);
+    strcpy(buf, "FRAME COUNTER: ");
+    fast_fmt_uint(buf + strlen(buf), (uint32_t)state->heartbeat_counter);
+    strcat(buf, " | CRC16 CHECKSUM: ");
+    fast_fmt_hex16(buf + strlen(buf), state->checksum);
     draw_text(35, 210, buf, s_active_theme->alarm_ok, 1);
 
     draw_rect(35, 240, 730, 2, s_active_theme->secondary_accent);
 
     draw_text(35, 255, "MEMORY ALLOCATION AUDIT (STATIC C99 BSS ARCHITECTURE)", s_active_theme->primary_accent, 2);
-    draw_text(35, 290, "FRAMEBUFFER STATIC ARRAY : 1,536,000 BYTES (800x480x4 ARGB)", s_active_theme->text_secondary, 1);
+    draw_text(35, 290, "FRAMEBUFFER STATIC ARRAY : 12,000 BYTES (800x480 4-BIT INDEXED)", s_active_theme->text_secondary, 1);
     draw_text(35, 315, "SHARED STATE BUFFER      : 36 BYTES (PACKED C99 STRUCT)", s_active_theme->text_secondary, 1);
     draw_text(35, 340, "DYNAMIC HEAP ALLOCATIONS : 0 BYTES (ZERO FRAGMENTATION)", s_active_theme->alarm_ok, 2);
-    draw_text(35, 375, "ESTIMATED BASE BINARY    : ~150 KB (HIGH AUDITABILITY)", s_active_theme->alarm_ok, 1);
+    draw_text(35, 375, "ESTIMATED BASE BINARY    : ~60 KB (HIGH AUDITABILITY)", s_active_theme->alarm_ok, 1);
 }
 
 static void render_screen_alarm(const shared_state_buffer_t *state, const watchdog_supervisor_t *wd)
@@ -388,25 +601,25 @@ static void render_screen_alarm(const shared_state_buffer_t *state, const watchd
 
     draw_text(35, 70, "SYSTEM ALARM SUPERVISOR", s_active_theme->primary_accent, 2);
 
-    if (state->alarm_severity != ALARM_NONE) {
+    if (state->alarm_severity != ALARM_NONE || (state->sensor_temp_mC > 45000)) {
         draw_border_rect(50, 110, 700, 100, s_active_theme->alarm_critical, s_active_theme->text_primary, 2);
-        draw_text(80, 130, "CRITICAL TRIP CONDITION DETECTED", 0xFFFFFFFF, 3);
-        draw_text(80, 175, "SENSOR OVER-LIMIT OR VOLTAGE DROP RECORDED IN BINARY STATE", 0xFFFFFFFF, 1);
+        draw_text(80, 130, "CRITICAL TRIP: CPU TEMP > 45 C", 15, 3);
+        draw_text(80, 175, "AUDIBLE ALARM BEEP ACTIVE - CPU OVER-TEMPERATURE RECORDED", 15, 1);
     } else {
         draw_border_rect(50, 110, 700, 100, s_active_theme->alarm_ok, s_active_theme->text_primary, 2);
-        draw_text(80, 130, "ALL SYSTEMS OPERATING NORMALLY", 0xFF000000, 3);
-        draw_text(80, 175, "NO UNACKNOWLEDGED ALARMS PRESENT IN STATE BUFFER", 0xFF000000, 1);
+        draw_text(80, 130, "ALL SYSTEMS OPERATING NORMALLY", 0, 3);
+        draw_text(80, 175, "CPU TEMP BELOW 45 C ALARM THRESHOLD", 0, 1);
     }
 
     draw_text(50, 240, "ACTIONS & CONTROLS:", s_active_theme->text_primary, 2);
 
     /* Button 1: Acknowledge Alarm (Width: 320, Text Centered) */
     draw_border_rect(40, 275, 310, 50, s_active_theme->primary_accent, s_active_theme->text_primary, 1);
-    draw_text(69, 293, "[A] ACKNOWLEDGE ALARM", 0xFF000000, 2);
+    draw_text(69, 293, "[A] ACKNOWLEDGE ALARM", 0, 2);
 
     /* Button 2: Engage Failover (Width: 310, Text Centered) */
     draw_border_rect(380, 275, 310, 50, s_active_theme->alarm_critical, s_active_theme->text_primary, 1);
-    draw_text(421, 293, "[F] ENGAGE FAILOVER", 0xFFFFFFFF, 2);
+    draw_text(421, 293, "[F] ENGAGE FAILOVER", 15, 2);
 
     draw_text(50, 350, "PRESS [A] ON KEYBOARD OR TOUCH TO ACKNOWLEDGE ALARMS", s_active_theme->text_secondary, 1);
 }
@@ -421,14 +634,14 @@ static void render_screen_settings(const shared_state_buffer_t *state, const wat
     draw_text(50, 120, "THEME ACCESSIBILITY MODE:", s_active_theme->text_primary, 1);
     if (s_active_theme->is_high_contrast) {
         draw_border_rect(280, 110, 220, 35, s_active_theme->primary_accent, s_active_theme->text_primary, 1);
-        draw_text(295, 122, "HIGH CONTRAST [ON]", 0xFF000000, 1);
+        draw_text(295, 122, "HIGH CONTRAST [ON]", 0, 1);
     } else {
         draw_border_rect(280, 110, 220, 35, s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
         draw_text(295, 122, "DARK MODE [ON]", s_active_theme->text_primary, 1);
     }
 
     draw_text(50, 170, "INPUT AGNOSTICISM MODE: UNIFIED INPUT GROUP (KEYPAD / TOUCH / CLI)", s_active_theme->text_primary, 1);
-    draw_text(50, 200, "DISPLAY RESOLUTION: 800 x 480 ARGB8888 (LVGL SAFE)", s_active_theme->text_primary, 1);
+    draw_text(50, 200, "DISPLAY RESOLUTION: 800 x 480 4-BIT COLOR (16-PALETTE)", s_active_theme->text_primary, 1);
     draw_text(50, 230, "SENSOR INGESTION FREQ: 1000 Hz (REAL-TIME ISR)", s_active_theme->text_primary, 1);
     draw_text(50, 260, "UI PRESENTATION REFRESH: 30 Hz (STALENESS CHECK & PARTIAL REDRAW)", s_active_theme->text_primary, 1);
 
@@ -443,67 +656,83 @@ static void render_screen_failover(const shared_state_buffer_t *state, const wat
     draw_border_rect(20, 55, 760, 375, s_active_theme->card_bg, s_active_theme->alarm_critical, 3);
     draw_rect(20, 55, 760, 40, s_active_theme->alarm_critical);
 
-    draw_text(180, 65, "HOT STANDBY FAILOVER ENGAGED", 0xFFFFFFFF, 3);
+    draw_text(180, 65, "HOT STANDBY FAILOVER ENGAGED", 0xFF, 3);
 
     draw_text(50, 115, "SAFEGUARD TRIPPED / STANDBY ACTIVATED", s_active_theme->alarm_critical, 1);
     draw_text(50, 135, "NEAR-ZERO LATENCY FAILOVER MODE ENGAGED", s_active_theme->primary_accent, 1);
 
     char buf[128];
-    snprintf(buf, sizeof(buf), "LAST VALID SENSOR TEMP : %.2f C", state->sensor_temp_mC / 1000.0f);
+    strcpy(buf, "LAST VALID SENSOR TEMP : ");
+    fast_fmt_float2(buf + strlen(buf), state->sensor_temp_mC / 1000.0f, " C");
     draw_text(50, 175, buf, s_active_theme->text_primary, 2);
 
-    snprintf(buf, sizeof(buf), "LAST VALID PRESSURE    : %.1f kPa", state->sensor_pressure_kPa / 10.0f);
+    strcpy(buf, "LAST VALID RAM LOAD    : ");
+    fast_fmt_uint(buf + strlen(buf), (uint32_t)state->sensor_pressure_kPa);
+    strcat(buf, " %");
     draw_text(50, 210, buf, s_active_theme->text_primary, 2);
 
-    snprintf(buf, sizeof(buf), "LAST VALID MOTOR RPM   : %lu RPM", (unsigned long)state->sensor_rpm);
+    strcpy(buf, "LAST VALID MOTOR RPM   : ");
+    fast_fmt_uint(buf + strlen(buf), (uint32_t)state->sensor_rpm);
+    strcat(buf, " RPM");
     draw_text(50, 245, buf, s_active_theme->text_primary, 2);
 
     draw_text(50, 285, "DUAL-LOOP WATCHDOG STATUS AT FAILOVER:", s_active_theme->primary_accent, 1);
-    snprintf(buf, sizeof(buf), "HARDWARE LOOP: %s | SOFTWARE LOOP: %s",
-             wd->hw_loop_alive ? "ALIVE" : "FAULTE", wd->sw_loop_alive ? "ALIVE" : "FAULTE");
+    strcpy(buf, "HARDWARE LOOP: ");
+    strcat(buf, wd->hw_loop_alive ? "ALIVE" : "FAULTE");
+    strcat(buf, " | SOFTWARE LOOP: ");
+    strcat(buf, wd->sw_loop_alive ? "ALIVE" : "FAULTE");
     draw_text(50, 305, buf, s_active_theme->alarm_critical, 2);
 
     draw_border_rect(50, 345, 400, 45, s_active_theme->alarm_ok, s_active_theme->text_primary, 1);
-    draw_text(127, 363, "PRESS [F] OR SELECT TO RESTORE PRIMARY HMI", 0xFF000000, 1);
+    draw_text(127, 363, "PRESS [F] OR SELECT TO RESTORE PRIMARY HMI", 0x00, 1);
 }
 
-/* --- Presentation Master Render Dispatch --- */
+/* --- Presentation Master Render Dispatch (16-Strip Band Renderer) --- */
 static void layer3_render_frame(void)
 {
     const shared_state_buffer_t *state = layer2_get_state_buffer();
     const watchdog_supervisor_t *wd = layer2_get_watchdog_status();
 
-    /* Clear Framebuffer with Background Color */
-    draw_rect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, s_active_theme->bg_color);
+    for (int s = 0; s < STRIP_COUNT; s++) {
+        s_current_strip_y = s * STRIP_HEIGHT;
 
-    /* Render Active Screen */
-    switch ((screen_id_t)state->active_screen) {
-        case SCREEN_BOOT:
-            render_screen_boot(state, wd);
-            break;
-        case SCREEN_DASHBOARD:
-            render_screen_dashboard(state, wd);
-            break;
-        case SCREEN_DIAGNOSTICS:
-            render_screen_diagnostics(state, wd);
-            break;
-        case SCREEN_ALARM:
-            render_screen_alarm(state, wd);
-            break;
-        case SCREEN_SETTINGS:
-            render_screen_settings(state, wd);
-            break;
-        case SCREEN_FAILOVER_STANDBY:
-            render_screen_failover(state, wd);
-            break;
-        default:
-            render_screen_dashboard(state, wd);
-            break;
+        /* Clear Strip Buffer with Active Theme Background Color */
+        uint8_t bg = s_active_theme->bg_color & 0x0F;
+        uint8_t double_bg = (bg << 4) | bg;
+        memset(s_strip_buffer, double_bg, sizeof(s_strip_buffer));
+
+        /* Render Active Screen (Elements clip automatically to s_current_strip_y) */
+        switch ((screen_id_t)state->active_screen) {
+            case SCREEN_DASHBOARD:
+                render_screen_dashboard(state, wd);
+                break;
+            case SCREEN_DIAGNOSTICS:
+                render_screen_diagnostics(state, wd);
+                break;
+            case SCREEN_ALARM:
+                render_screen_alarm(state, wd);
+                break;
+            case SCREEN_SETTINGS:
+                render_screen_settings(state, wd);
+                break;
+            case SCREEN_FAILOVER_STANDBY:
+                render_screen_failover(state, wd);
+                break;
+            default:
+                render_screen_dashboard(state, wd);
+                break;
+        }
+
+        /* Flush Strip Buffer to Layer 1 HAL Callback */
+        display_area_t area = {
+            0,
+            (int16_t)s_current_strip_y,
+            DISPLAY_WIDTH - 1,
+            (int16_t)(s_current_strip_y + STRIP_HEIGHT - 1),
+            s_strip_buffer
+        };
+        layer1_display_flush_cb(&area, s_strip_buffer);
     }
-
-    /* Flush to display via Layer 1 Display Flush Callback */
-    display_area_t area = {0, 0, DISPLAY_WIDTH - 1, DISPLAY_HEIGHT - 1, s_framebuffer};
-    layer1_display_flush_cb(&area, s_framebuffer);
 }
 
 static void lvgl_display_flush_cb(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p)
@@ -533,7 +762,7 @@ static void lvgl_indev_read_cb(lv_indev_drv_t * indev_drv, lv_indev_data_t * dat
 
 void layer3_presentation_init(void)
 {
-    memset(s_framebuffer, 0, sizeof(s_framebuffer));
+    memset(s_strip_buffer, 0, sizeof(s_strip_buffer));
     s_active_theme = &s_theme_dark;
 
     /* Initialize LVGL Core Engine */
@@ -541,7 +770,7 @@ void layer3_presentation_init(void)
 
     /* Setup LVGL Display Draw Buffer */
     static lv_disp_draw_buf_t draw_buf;
-    lv_disp_draw_buf_init(&draw_buf, s_framebuffer, NULL, DISPLAY_WIDTH * DISPLAY_HEIGHT);
+    lv_disp_draw_buf_init(&draw_buf, s_strip_buffer, NULL, DISPLAY_BUF_SIZE);
 
     /* Register LVGL Display Driver */
     static lv_disp_drv_t disp_drv;
@@ -562,12 +791,31 @@ void layer3_presentation_init(void)
     lv_group_t * input_group = lv_group_create();
     lv_indev_set_group(indev, input_group);
 
-    printf("[LAYER 3 PRESENTATION] LVGL Presentation Engine, Drivers & Screens Initialized.\n");
+    printf("[LAYER 3 PRESENTATION] LVGL Strip Presentation Engine (12 KB Buffer) Initialized.\n");
 }
 
 /* 30 Hz UI Timer Tick (Executes rendering, staleness check, software alive heartbeat) */
 void layer3_ui_timer_tick_30hz(void)
 {
+    /* Push latest sensor temperature reading into realtime chart ring buffer */
+    const shared_state_buffer_t *st = layer2_get_state_buffer();
+    float cur_temp = st->sensor_temp_mC / 1000.0f;
+    if (s_history_count < CHART_HISTORY_LEN) {
+        s_temp_history[s_history_count++] = cur_temp;
+    } else {
+        memmove(&s_temp_history[0], &s_temp_history[1], sizeof(float) * (CHART_HISTORY_LEN - 1));
+        s_temp_history[CHART_HISTORY_LEN - 1] = cur_temp;
+    }
+
+    /* Push CPU load reading into CPU history ring buffer */
+    float cur_cpu = layer0_get_host_cpu_load();
+    if (s_cpu_history_count < CPU_HISTORY_LEN) {
+        s_cpu_history[s_cpu_history_count++] = cur_cpu;
+    } else {
+        memmove(&s_cpu_history[0], &s_cpu_history[1], sizeof(float) * (CPU_HISTORY_LEN - 1));
+        s_cpu_history[CPU_HISTORY_LEN - 1] = cur_cpu;
+    }
+
     /* Increment LVGL Ticks & Run LVGL Task Handler */
     lv_tick_inc(33);
     lv_task_handler();
@@ -593,19 +841,28 @@ void layer3_handle_touch(int16_t x, int16_t y, bool pressed)
 {
     if (!pressed) return;
 
+    const shared_state_buffer_t *state = layer2_get_state_buffer();
+
+    /* Screen-specific button touches */
+    if ((screen_id_t)state->active_screen == SCREEN_ALARM) {
+        /* Button 1: Acknowledge Alarm (x: 40..350, y: 275..325) */
+        if (x >= 40 && x < 350 && y >= 275 && y < 325) {
+            layer3_inject_input_key(KEY_ALARM_ACK);
+            return;
+        }
+    }
+
     /* Handle bottom navigation bar touch points */
     if (y >= (DISPLAY_HEIGHT - 38)) {
-        if (x >= 10 && x < 120) {
-            layer2_fsm_request_screen_change(SCREEN_BOOT);
-        } else if (x >= 130 && x < 240) {
+        if (x >= 10 && x < 150) {
             layer2_fsm_request_screen_change(SCREEN_DASHBOARD);
-        } else if (x >= 250 && x < 360) {
+        } else if (x >= 160 && x < 300) {
             layer2_fsm_request_screen_change(SCREEN_DIAGNOSTICS);
-        } else if (x >= 370 && x < 480) {
+        } else if (x >= 310 && x < 450) {
             layer2_fsm_request_screen_change(SCREEN_ALARM);
-        } else if (x >= 490 && x < 600) {
+        } else if (x >= 460 && x < 600) {
             layer2_fsm_request_screen_change(SCREEN_SETTINGS);
-        } else if (x >= 610 && x < 720) {
+        } else if (x >= 610 && x < 750) {
             layer2_fsm_request_screen_change(SCREEN_FAILOVER_STANDBY);
         }
     }
@@ -627,7 +884,7 @@ const hmi_theme_t* layer3_get_current_theme(void)
     return s_active_theme;
 }
 
-const uint32_t* layer3_get_framebuffer(void)
+const uint8_t* layer3_get_framebuffer(void)
 {
-    return s_framebuffer;
+    return s_strip_buffer;
 }

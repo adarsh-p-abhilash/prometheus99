@@ -18,8 +18,10 @@
 /* --- Display Specifications --- */
 #define DISPLAY_WIDTH          800
 #define DISPLAY_HEIGHT         480
-#define DISPLAY_COLOR_DEPTH    32     /* ARGB8888 / RGB888 32-bit color format */
-#define DISPLAY_BUF_SIZE       (DISPLAY_WIDTH * DISPLAY_HEIGHT)
+#define DISPLAY_COLOR_DEPTH    4      /* 4-bit indexed color format */
+#define STRIP_HEIGHT           30     /* 16 rendering strips of 30px height = 480px */
+#define STRIP_COUNT            (DISPLAY_HEIGHT / STRIP_HEIGHT)
+#define DISPLAY_BUF_SIZE       ((DISPLAY_WIDTH * STRIP_HEIGHT) / 2) /* 12 KB Strip Buffer */
 
 /* --- Timing Specifications --- */
 #define SENSOR_ISR_FREQ_HZ     1000   /* Layer 1: Sensor & Fieldbus ISR (1000 Hz / 1 ms tick) */
@@ -32,8 +34,7 @@
 
 /* --- Pre-Allocated Screen Identifiers --- */
 typedef enum {
-    SCREEN_BOOT = 0,
-    SCREEN_DASHBOARD,
+    SCREEN_DASHBOARD = 0,
     SCREEN_DIAGNOSTICS,
     SCREEN_ALARM,
     SCREEN_SETTINGS,

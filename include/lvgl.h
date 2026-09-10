@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 /* --- LVGL Color Type --- */
-typedef uint32_t lv_color_t;
+typedef uint8_t lv_color_t;
 
 /* --- LVGL Area Structure --- */
 typedef struct {
@@ -175,6 +175,24 @@ void lv_bar_set_value(lv_obj_t * bar, int32_t value, bool anim);
 void lv_bar_set_range(lv_obj_t * bar, int32_t min, int32_t max);
 
 lv_obj_t * lv_btn_create(lv_obj_t * parent);
+
+/* Chart API */
+typedef enum {
+    LV_CHART_TYPE_NONE = 0,
+    LV_CHART_TYPE_LINE,
+    LV_CHART_TYPE_BAR
+} lv_chart_type_t;
+
+typedef struct {
+    lv_color_t color;
+    int16_t * points;
+} lv_chart_series_t;
+
+lv_obj_t * lv_chart_create(lv_obj_t * parent);
+void lv_chart_set_type(lv_obj_t * obj, lv_chart_type_t type);
+lv_chart_series_t * lv_chart_add_series(lv_obj_t * chart, lv_color_t color, uint8_t axis);
+void lv_chart_set_next_value(lv_obj_t * chart, lv_chart_series_t * ser, int16_t value);
+void lv_chart_set_point_count(lv_obj_t * obj, uint16_t cnt);
 
 /* Task / Timer Handler API */
 uint32_t lv_task_handler(void);

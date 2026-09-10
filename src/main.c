@@ -20,9 +20,34 @@
 #include <process.h>
 
 static HWND s_hwnd = NULL;
-static BITMAPINFO s_bmi;
+static struct {
+    BITMAPINFOHEADER bmiHeader;
+    RGBQUAD          bmiColors[16];
+} s_bmi_strip;
+static HDC s_active_paint_hdc = NULL;
 static bool s_running = true;
 static HANDLE s_isr_thread = NULL;
+
+void main_flush_strip_to_screen(const display_area_t *area, const uint8_t *color_p)
+{
+    HDC hdc = s_active_paint_hdc;
+    bool release_dc = false;
+    if (!hdc && s_hwnd) {
+        hdc = GetDC(s_hwnd);
+        release_dc = true;
+    }
+    if (hdc && area && color_p) {
+        int w = area->x2 - area->x1 + 1;
+        int h = area->y2 - area->y1 + 1;
+        StretchDIBits(hdc,
+                      area->x1, area->y1, w, h,
+                      0, 0, w, h,
+                      color_p, (const BITMAPINFO*)&s_bmi_strip, DIB_RGB_COLORS, SRCCOPY);
+    }
+    if (release_dc && hdc && s_hwnd) {
+        ReleaseDC(s_hwnd, hdc);
+    }
+}
 
 /* Win32 Window Callback Handler */
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -34,13 +59,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
-            const uint32_t *fb = layer3_get_framebuffer();
-            if (fb) {
-                StretchDIBits(hdc,
-                              0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                              0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                              fb, &s_bmi, DIB_RGB_COLORS, SRCCOPY);
-            }
+            s_active_paint_hdc = hdc;
+            layer3_ui_timer_tick_30hz();
+            s_active_paint_hdc = NULL;
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -56,22 +77,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_KEYDOWN: {
             switch (wParam) {
                 case '1':
-                    layer3_inject_input_key(KEY_PREV);
-                    layer2_fsm_request_screen_change(SCREEN_BOOT);
-                    break;
-                case '2':
-                    layer3_inject_input_key(KEY_NEXT);
                     layer2_fsm_request_screen_change(SCREEN_DASHBOARD);
                     break;
-                case '3':
+                case '2':
                     layer2_fsm_request_screen_change(SCREEN_DIAGNOSTICS);
                     break;
-                case '4':
+                case '3':
                     layer2_fsm_request_screen_change(SCREEN_ALARM);
                     break;
-                case '5':
+                case '4':
                     layer2_fsm_request_screen_change(SCREEN_SETTINGS);
                     break;
+                case '5':
                 case '6':
                 case 'F':
                     layer3_inject_input_key(KEY_TOGGLE_FAILOVER);
@@ -140,14 +157,37 @@ int main(int argc, char *argv[])
     layer2_core_init();
     layer3_presentation_init();
 
-    /* Setup Win32 Bitmap Format for 800x480 ARGB Rendering */
-    memset(&s_bmi, 0, sizeof(s_bmi));
-    s_bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    s_bmi.bmiHeader.biWidth = DISPLAY_WIDTH;
-    s_bmi.bmiHeader.biHeight = -DISPLAY_HEIGHT; /* Top-down DIB */
-    s_bmi.bmiHeader.biPlanes = 1;
-    s_bmi.bmiHeader.biBitCount = 32;
-    s_bmi.bmiHeader.biCompression = BI_RGB;
+    /* Setup Win32 Bitmap Format for 800x30 4-Bit Strip Palette Rendering */
+    memset(&s_bmi_strip, 0, sizeof(s_bmi_strip));
+    s_bmi_strip.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    s_bmi_strip.bmiHeader.biWidth = DISPLAY_WIDTH;
+    s_bmi_strip.bmiHeader.biHeight = -STRIP_HEIGHT; /* Top-down Strip DIB */
+    s_bmi_strip.bmiHeader.biPlanes = 1;
+    s_bmi_strip.bmiHeader.biBitCount = 4;
+    s_bmi_strip.bmiHeader.biCompression = BI_RGB;
+    s_bmi_strip.bmiHeader.biClrUsed = 16;
+    s_bmi_strip.bmiHeader.biClrImportant = 16;
+
+    /* Standard 16-Color HMI Palette Table (RGBQUAD: Blue, Green, Red, Reserved) */
+    static const RGBQUAD palette16[16] = {
+        {0x00, 0x00, 0x00, 0}, /* 0: Black */
+        {0x2A, 0x17, 0x0F, 0}, /* 1: Dark Navy */
+        {0x3B, 0x29, 0x1E, 0}, /* 2: Slate Card */
+        {0x58, 0x3A, 0x1E, 0}, /* 3: Dark Cyan Grid */
+        {0x89, 0x4E, 0x1D, 0}, /* 4: Dark Blue */
+        {0xF6, 0x82, 0x3B, 0}, /* 5: Electric Blue */
+        {0xFF, 0xD2, 0x00, 0}, /* 6: Glowing Cyan */
+        {0x81, 0xB9, 0x10, 0}, /* 7: Emerald Green */
+        {0x66, 0xFF, 0x00, 0}, /* 8: Bright Green */
+        {0x44, 0x44, 0xEF, 0}, /* 9: Crimson Red */
+        {0x00, 0x00, 0xFF, 0}, /* 10: Bright Red */
+        {0x07, 0xC1, 0xFF, 0}, /* 11: Amber / Yellow */
+        {0x00, 0xFF, 0xFF, 0}, /* 12: Vibrant Yellow */
+        {0xB8, 0xA3, 0x94, 0}, /* 13: Cool Grey */
+        {0xF0, 0xE8, 0xE2, 0}, /* 14: Light Grey */
+        {0xFF, 0xFF, 0xFF, 0}  /* 15: Pure White */
+    };
+    memcpy(s_bmi_strip.bmiColors, palette16, sizeof(palette16));
 
     /* Register Win32 Window Class */
     HINSTANCE hInst = GetModuleHandle(NULL);
@@ -184,11 +224,12 @@ int main(int argc, char *argv[])
     UpdateWindow(s_hwnd);
     SetForegroundWindow(s_hwnd);
     SetFocus(s_hwnd);
+    SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
 
     printf("[INIT] GUI Window Created (800x480 Resolution).\n");
 
-    /* Launch 1000 Hz Sensor ISR Background Thread with 32KB stack (RAM optimized) */
-    s_isr_thread = (HANDLE)_beginthreadex(NULL, 32768, sensor_isr_thread_proc, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+    /* Launch 1000 Hz Sensor ISR Background Thread with 8KB stack (RAM optimized) */
+    s_isr_thread = (HANDLE)_beginthreadex(NULL, 8192, sensor_isr_thread_proc, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
     if (!s_isr_thread) {
         fprintf(stderr, "[ERROR] Failed to start 1000 Hz Sensor ISR Thread.\n");
         return 1;
@@ -198,8 +239,8 @@ int main(int argc, char *argv[])
     printf("[INIT] 30 Hz LVGL UI Presentation Loop Started.\n");
     printf("-----------------------------------------------------------------\n");
     printf(" KEYBOARD SHORTCUTS:\n");
-    printf("  [1] Boot Screen      [2] System Dashboard   [3] Binary Diagnostics\n");
-    printf("  [4] Alarm Supervisor [5] Settings/Contrast  [6/F] Hot Standby Failover\n");
+    printf("  [1] System Dashboard   [2] Binary Diagnostics [3] Alarm Supervisor\n");
+    printf("  [4] Settings/Contrast  [5/F] Hot Standby Failover\n");
     printf("  [A] Acknowledge      [C] Toggle Contrast    [Esc] Back\n");
     printf("-----------------------------------------------------------------\n");
 
