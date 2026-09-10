@@ -32,7 +32,7 @@ void layer1_hal_init(void)
     s_key_queue_head = 0;
     s_key_queue_tail = 0;
     s_touch_pending = false;
-    printf("[LAYER 1 HAL] Drivers, Input Queue & 1000Hz Sensor ISR initialized.\n");
+    printf("[L1] HAL Ready\n");
 }
 
 /* Executed by High-Resolution Interrupt / Thread at 1000 Hz */

@@ -23,8 +23,11 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <windows.h>
+#include <mmsystem.h>
 #include <process.h>
 #include <psapi.h>
+
+static bool s_alarm_audio_active = false;
 
 static HWND s_hwnd = NULL;
 static HDC s_current_paint_hdc = NULL;
@@ -79,17 +82,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (wParam >= '1' && wParam <= '5') {
                 layer2_fsm_request_screen_change((screen_id_t)(wParam - '1'));
             } else {
-                switch (wParam) {
-                    case '6':
-                    case 'F':       layer1_queue_key(KEY_TOGGLE_FAILOVER); break;
-                    case 'A':       layer1_queue_key(KEY_ALARM_ACK); break;
-                    case 'C':       layer1_queue_key(KEY_TOGGLE_CONTRAST); break;
-                    case VK_LEFT:   layer1_queue_key(KEY_PREV); break;
-                    case VK_RIGHT:  layer1_queue_key(KEY_NEXT); break;
-                    case VK_RETURN: layer1_queue_key(KEY_SELECT); break;
-                    case VK_ESCAPE: layer1_queue_key(KEY_BACK); break;
-                    default: break;
-                }
+                input_key_t k = KEY_NONE;
+                if (wParam == 'F') k = KEY_TOGGLE_FAILOVER;
+                else if (wParam == 'A') k = KEY_ALARM_ACK;
+                else if (wParam == 'C') k = KEY_TOGGLE_CONTRAST;
+                else if (wParam == 'T') k = KEY_TEST_ALARM;
+                else if (wParam == 'W') k = KEY_SIMULATE_WD_FAULT;
+                else if (wParam == VK_LEFT) k = KEY_PREV;
+                else if (wParam == VK_RIGHT) k = KEY_NEXT;
+                else if (wParam == VK_RETURN) k = KEY_SELECT;
+                else if (wParam == VK_ESCAPE) k = KEY_BACK;
+                if (k != KEY_NONE) layer1_queue_key(k);
             }
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
@@ -122,7 +125,7 @@ int main(int argc, char *argv[])
     (void)argc;
     (void)argv;
 
-    printf("[INIT] Prometheus99 4-Bit LVGL HMI\n");
+    printf("[INIT] Prometheus99\n");
 
     /* Initialize Layers */
     layer0_hardware_init();
@@ -188,19 +191,19 @@ int main(int argc, char *argv[])
     SetForegroundWindow(s_hwnd);
     SetFocus(s_hwnd);
 
-    printf("[INIT] GUI Window Created (800x480)\n");
+    printf("[INIT] GUI 800x480\n");
 
     /* Launch 1000 Hz Sensor ISR Background Thread (16 KB stack) */
     s_isr_thread = (HANDLE)_beginthreadex(NULL, 16384, sensor_isr_thread_proc, NULL, 0, NULL);
     if (!s_isr_thread) {
-        fprintf(stderr, "[ERROR] Failed to start 1000 Hz Sensor ISR Thread.\n");
+        fprintf(stderr, "[ERROR] ISR Fail\n");
         return 1;
     }
 
     /* Trim process working set to guarantee < 1.5 MB memory footprint */
     SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
 
-    printf("[KEYS] 1-5:Screen F:Failover A:Ack C:Contrast\n");
+    printf("[KEYS] 1-5 A F C T W\n");
 
     /* Main Execution Loop: 30 Hz LVGL Presentation Tick + Win32 Message Pump */
     MSG msg;
@@ -228,6 +231,18 @@ int main(int argc, char *argv[])
             /* Trigger Redraw on Window */
             InvalidateRect(s_hwnd, NULL, FALSE);
 
+            /* Alarm Audio Supervisor: Continuous sound while trip is active until acknowledged */
+            shared_state_buffer_t cur_st;
+            layer2_snapshot_state(&cur_st);
+            bool alarm_active = (cur_st.alarm_latch_state == ALARM_STATE_ACTIVE);
+            if (alarm_active != s_alarm_audio_active) {
+                s_alarm_audio_active = alarm_active;
+                PlaySoundA(alarm_active ? "SystemHand" : NULL, NULL, alarm_active ? (SND_ALIAS | SND_ASYNC | SND_LOOP) : 0);
+            }
+            if (alarm_active && (frame_count % 15 == 0)) {
+                MessageBeep(MB_ICONHAND);
+            }
+
             /* Maintain ultra-compact Working Set (<= 0.2 MB RAM) */
             if (frame_count % 2 == 0) {
                 EmptyWorkingSet(GetCurrentProcess());
@@ -236,6 +251,8 @@ int main(int argc, char *argv[])
 
         Sleep(5); /* Yield CPU */
     }
+
+    PlaySoundA(NULL, NULL, 0);
 
     /* Cleanup */
     if (s_isr_thread) {
@@ -246,6 +263,6 @@ int main(int argc, char *argv[])
     /* Properly unregister window class */
     UnregisterClassA(S_WND_CLASS, hInst);
 
-    printf("[EXIT] HMI Terminated Safely.\n");
+    printf("[EXIT] Terminated\n");
     return 0;
 }

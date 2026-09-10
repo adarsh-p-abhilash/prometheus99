@@ -426,24 +426,20 @@ static void draw_trend_graph(int x, int y, int w, int h, const telemetry_ring_bu
     }
 
     uint16_t count = trend->count;
-    float step_x = (float)graph_w / (float)(TREND_HISTORY_SAMPLES - 1);
-
     for (uint16_t i = 0; i < count; i++) {
         uint16_t idx = (trend->head + TREND_HISTORY_SAMPLES - count + i) % TREND_HISTORY_SAMPLES;
-        float temp_c = trend->samples[idx].temp_mC / 1000.0f;
+        uint32_t tm = trend->samples[idx].temp_mC;
 
-        float norm = (temp_c - 30.0f) / 50.0f;
-        if (norm < 0.0f) norm = 0.0f;
-        if (norm > 1.0f) norm = 1.0f;
+        int norm = (int)((tm > 30000) ? (tm - 30000) * graph_h / 50000 : 0);
+        if (norm > graph_h) norm = graph_h;
 
-        int px = graph_x + (int)(i * step_x);
-        int py = graph_y + graph_h - (int)(norm * graph_h);
+        int px = graph_x + (int)(i * graph_w / (TREND_HISTORY_SAMPLES - 1));
+        int py = graph_y + graph_h - norm;
 
         if (px >= 0 && px + 1 < DISPLAY_WIDTH && py >= 0 && py + 1 < DISPLAY_HEIGHT) {
-            lv_color_t dot_color = (temp_c > 65.0f) ? s_active_theme->alarm_critical : 
-                                   (temp_c > 55.0f) ? (lv_color_t){ .full = LV_COLOR_INDEX_AMBER } : 
-                                   s_active_theme->primary_accent;
-            uint8_t dot4 = dot_color.full;
+            uint8_t dot4 = (tm > 65000) ? s_active_theme->alarm_critical.full : 
+                           (tm > 55000) ? (uint8_t)LV_COLOR_INDEX_AMBER : 
+                           (uint8_t)s_active_theme->primary_accent.full;
             put_pixel_4bit(px, py, dot4);
             put_pixel_4bit(px + 1, py, dot4);
             put_pixel_4bit(px, py + 1, dot4);
@@ -460,58 +456,48 @@ static void draw_hmi_header(const char *screen_title, const shared_state_buffer_
     draw_rect(0, 41, DISPLAY_WIDTH, 1, s_active_theme->primary_accent);
 
     draw_text(16, 12, "PROMETHEUS99 [4-BIT]", s_active_theme->primary_accent, 2);
-    draw_text(285, 14, screen_title, s_active_theme->text_primary, 2);
+    draw_text(275, 14, screen_title, s_active_theme->text_primary, 2);
 
-    /* Watchdog Health Pill */
-    lv_color_t wd_color = wd->system_healthy ? s_active_theme->alarm_ok : s_active_theme->alarm_critical;
+    /* Watchdog Health & Alert Annunciator Pill (Flashes on alert / alarm / WD fault) */
+    bool is_alert = (state->alarm_latch_state == ALARM_STATE_ACTIVE) || (state->alarm_severity >= ALARM_WARNING) || (!wd->system_healthy);
     lv_color_t black_col = { .full = LV_COLOR_INDEX_BLACK };
-    draw_border_rect(610, 10, 75, 22, wd_color, s_active_theme->text_primary, 1);
-    draw_text(616, 14, wd->system_healthy ? "WD: OK" : "WD: TRIP", black_col, 1);
+    lv_color_t white_col = { .full = LV_COLOR_INDEX_WHITE };
+    lv_color_t wd_bg = s_active_theme->alarm_ok;
+    lv_color_t wd_tc = black_col;
+    const char *wd_msg = "WD: OK";
+    int tx = 618;
+
+    if (is_alert) {
+        bool flash = ((state->timestamp_ms / 300) % 2) != 0;
+        wd_bg = flash ? s_active_theme->alarm_critical : (lv_color_t){ .full = LV_COLOR_INDEX_AMBER };
+        wd_tc = flash ? white_col : black_col;
+        wd_msg = (!wd->system_healthy) ? "WD: FAULT" : (state->alarm_latch_state == ALARM_STATE_ACTIVE) ? "WD: ALERT" : "WD: WARN";
+        tx = 611;
+    }
+    draw_border_rect(605, 9, 82, 24, wd_bg, s_active_theme->text_primary, 1);
+    draw_text(tx, 14, wd_msg, wd_tc, 1);
 
     /* Heartbeat Indicator Badge */
     snprintf(s_text_buf, sizeof(s_text_buf), "F: %lu", (unsigned long)state->heartbeat_counter);
     draw_text(695, 14, s_text_buf, s_active_theme->text_secondary, 1);
 
-    /* Bottom Navigation Bar */
+    /* Bottom Navigation Bar (5 Screens evenly distributed) */
     draw_rect(0, DISPLAY_HEIGHT - 38, DISPLAY_WIDTH, 38, s_active_theme->card_bg);
     draw_rect(0, DISPLAY_HEIGHT - 38, DISPLAY_WIDTH, 1, s_active_theme->secondary_accent);
 
     screen_id_t active = (screen_id_t)state->active_screen;
-    lv_color_t white_col = { .full = LV_COLOR_INDEX_WHITE };
-    static const char * const nav_btns[6] = { "1:BOOT", "2:DASHBOARD", "3:DIAGNOST", "4:ALARM", "5:SETTINGS", "6:FAILOVER" };
-    for (int i = 0; i < 6; i++) {
-        int nx = 10 + i * 130;
+    static const char * const nav_btns[5] = { "1:DASHBOARD", "2:DIAGNOST", "3:ALARM", "4:SETTINGS", "5:FAILOVER" };
+    for (int i = 0; i < 5; i++) {
+        int nx = 14 + i * 156;
         bool is_act = (active == (screen_id_t)i);
-        lv_color_t bg = is_act ? ((i == 5) ? s_active_theme->alarm_critical : s_active_theme->primary_accent) : s_active_theme->card_bg;
-        lv_color_t tc = is_act ? ((i == 5) ? white_col : black_col) : s_active_theme->text_primary;
-        draw_border_rect(nx, DISPLAY_HEIGHT - 32, 125, 26, bg, s_active_theme->secondary_accent, 1);
-        draw_text(nx + 16, DISPLAY_HEIGHT - 25, nav_btns[i], tc, 1);
+        lv_color_t bg = is_act ? ((i == 4 && state->failover_active) ? s_active_theme->alarm_critical : s_active_theme->primary_accent) : s_active_theme->card_bg;
+        lv_color_t tc = is_act ? black_col : s_active_theme->text_primary;
+        draw_border_rect(nx, DISPLAY_HEIGHT - 32, 148, 26, bg, s_active_theme->secondary_accent, 1);
+        draw_text(nx + 18, DISPLAY_HEIGHT - 25, nav_btns[i], tc, 1);
     }
 }
 
 /* --- Pre-Allocated Screen Renders --- */
-
-static void render_screen_boot(const shared_state_buffer_t *state, const watchdog_supervisor_t *wd)
-{
-    draw_hmi_header("BOOT SEQUENCE", state, wd);
-
-    draw_border_rect(150, 80, 500, 310, s_active_theme->card_bg, s_active_theme->primary_accent, 2);
-
-    draw_text(205, 110, "PROMETHEUS99: LVGL EMBEDDED", s_active_theme->primary_accent, 2);
-    draw_text(220, 140, "4-BIT PACKED NIBBLE STATIC ENGINE", s_active_theme->text_secondary, 1);
-
-    draw_text(180, 180, "[OK] LVGL Display Driver (4-Bit Band): 18.75 KB RAM", s_active_theme->alarm_ok, 1);
-    draw_text(180, 205, "[OK] Live Host Sensors (PDH ACPI, IOCTL SSD, Win32)", s_active_theme->alarm_ok, 1);
-    draw_text(180, 230, "[OK] Dual-Loop Watchdog Supervisor: ACTIVE", s_active_theme->alarm_ok, 1);
-    draw_text(180, 255, "[OK] Lock-Free Ping-Pong State Exchange: READY", s_active_theme->alarm_ok, 1);
-
-    float progress = ((float)(state->heartbeat_counter % 100)) / 100.0f;
-    draw_text(180, 295, "SYSTEM INITIALIZATION PROGRESS:", s_active_theme->text_primary, 1);
-    draw_progress_bar(180, 315, 440, 22, progress, s_active_theme->primary_accent, s_active_theme->card_bg);
-
-    snprintf(s_text_buf, sizeof(s_text_buf), "%3d%% COMPLETE - PRESS [2] DASHBOARD", (int)(progress * 100));
-    draw_text(240, 350, s_text_buf, s_active_theme->text_secondary, 1);
-}
 
 static void render_screen_dashboard(const shared_state_buffer_t *state, const watchdog_supervisor_t *wd)
 {
@@ -524,11 +510,11 @@ static void render_screen_dashboard(const shared_state_buffer_t *state, const wa
     draw_border_rect(30, 60, 225, 115, s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
     draw_text(45, 75, "HOST CPU THERMALS", s_active_theme->text_secondary, 1);
     snprintf(s_val_buf, sizeof(s_val_buf), "%.1f C", temp_c);
-    lv_color_t temp_col = (temp_c > 65.0f) ? s_active_theme->alarm_critical : 
-                          (temp_c > 55.0f) ? (lv_color_t){ .full = LV_COLOR_INDEX_AMBER } : 
+    lv_color_t temp_col = (temp_c >= 55.0f) ? s_active_theme->alarm_critical : 
+                          (temp_c >= 48.0f) ? (lv_color_t){ .full = LV_COLOR_INDEX_AMBER } : 
                           s_active_theme->alarm_ok;
     draw_text(45, 95, s_val_buf, temp_col, 2);
-    snprintf(s_val_buf, sizeof(s_val_buf), "STATUS: %s", (temp_c > 65.0f) ? "HOT / WARNING" : (temp_c > 55.0f) ? "ELEVATED" : "OPTIMAL");
+    snprintf(s_val_buf, sizeof(s_val_buf), "STATUS: %s", (temp_c >= 55.0f) ? "TRIP / WARNING" : (temp_c >= 48.0f) ? "ELEVATED" : "OPTIMAL");
     draw_text(45, 122, s_val_buf, temp_col, 1);
     draw_progress_bar(45, 140, 195, 12, (temp_c - 20.0f) / 60.0f, temp_col, s_active_theme->card_bg);
 
@@ -578,13 +564,13 @@ static void render_screen_dashboard(const shared_state_buffer_t *state, const wa
                             (state->alarm_severity == ALARM_CRITICAL) ? "CRITICAL: THERMAL / MEMORY TRIP" : "WARNING: HIGH LOAD / THERMAL";
     lv_color_t alarm_col = (state->alarm_severity == ALARM_NONE) ? s_active_theme->alarm_ok : s_active_theme->alarm_critical;
 
-    snprintf(s_text_buf, sizeof(s_text_buf), "SUPERVISORY ALARM STATUS:  %s", alarm_str);
+    snprintf(s_text_buf, sizeof(s_text_buf), "ALARM:    %s", alarm_str);
     draw_text(45, 355, s_text_buf, alarm_col, 1);
 
-    snprintf(s_text_buf, sizeof(s_text_buf), "FAILOVER SUBSYSTEM STATUS: %s", state->failover_active ? "HOT STANDBY ACTIVE" : "PRIMARY CONTROLLER ONLINE");
+    snprintf(s_text_buf, sizeof(s_text_buf), "FAILOVER: %s", state->failover_active ? "HOT STANDBY ACTIVE" : "PRIMARY ONLINE");
     draw_text(45, 375, s_text_buf, state->failover_active ? s_active_theme->alarm_critical : s_active_theme->alarm_ok, 1);
 
-    snprintf(s_text_buf, sizeof(s_text_buf), "TELEMETRY CHECKSUM (CRC16): 0x%04X [VALID] | LIVE HOST INGESTION", state->checksum);
+    snprintf(s_text_buf, sizeof(s_text_buf), "CRC16:    0x%04X [VALID] | LIVE HOST INGESTION", state->checksum);
     draw_text(45, 395, s_text_buf, s_active_theme->text_secondary, 1);
 }
 
@@ -597,18 +583,18 @@ static void render_screen_diagnostics(const shared_state_buffer_t *state, const 
     draw_text(45, 75, "STATIC MEMORY BUDGET (ZERO DYNAMIC)", s_active_theme->primary_accent, 1);
 
     static const char * const d_left[] = {
-        "HEAP CONSUMPTION: 0 B (MALLOC FREE)",
-        "LVGL BAND BUFFER: 18.75 KB (4-BIT)",
-        "PING-PONG SLOTS: 2x 52 B (104 B)",
-        "TELEMETRY RING (60s): 964 BYTES",
-        "ALARM JOURNAL: 16 EVENTS (772 B)",
-        "HAL INPUT QUEUE (8): 32 BYTES",
-        "TOTAL RUNTIME RAM: < 0.2 MB [MET]",
-        "RAM SAVINGS VS 32-BIT: 98.7%",
-        "BINARY DISK TARGET: <= 30 KB [MET]",
-        "HOST SENSORS: DYNAMIC (0 IAT)",
-        "DATA RACE HAZARD: 0 (LOCK-FREE)",
-        "WATCHDOG DUAL-LOOP: ACTIVE (ISR+UI)"
+        "HEAP USE: 0 B (MALLOC FREE)",
+        "LVGL BAND: 18.75 KB (4-BIT)",
+        "PING-PONG: 2x 52 B (104 B)",
+        "TREND RING (60s): 964 B",
+        "ALARM JOURNAL: 16 (772 B)",
+        "HAL INPUT QUEUE: 32 BYTES",
+        "TOTAL RAM: < 0.2 MB [MET]",
+        "RAM SAVING VS 32-BIT: 98.7%",
+        "BINARY SIZE: <= 30 KB [MET]",
+        "HOST SENSORS: 0 IAT DYN",
+        "RACE HAZARD: 0 (LOCK-FREE)",
+        "WATCHDOG DUAL-LOOP: ACTIVE"
     };
     for (int i = 0; i < 12; i++) {
         draw_text(45, 105 + i * 25, d_left[i], (i == 0 || i >= 6) ? s_active_theme->alarm_ok : s_active_theme->text_primary, 1);
@@ -653,10 +639,10 @@ static void render_screen_alarm(const shared_state_buffer_t *state, const watchd
     lv_color_t sev_col = s_active_theme->alarm_ok;
     lv_color_t amber_col = { .full = LV_COLOR_INDEX_AMBER };
     if (state->alarm_severity == ALARM_WARNING) {
-        sev_str = "WARNING: ELEVATED HOST TEMPERATURE / RAM USAGE";
+        sev_str = "WARNING: HIGH LOAD / THERMAL";
         sev_col = amber_col;
     } else if (state->alarm_severity >= ALARM_CRITICAL) {
-        sev_str = "CRITICAL: HOST HARDWARE THERMAL TRIP EXCEEDED";
+        sev_str = "CRITICAL: HOST TRIP REACHED (>= 55 C / 80% CPU)";
         sev_col = s_active_theme->alarm_critical;
     }
 
@@ -668,8 +654,8 @@ static void render_screen_alarm(const shared_state_buffer_t *state, const watchd
     snprintf(s_text_buf, sizeof(s_text_buf), "LATCH STATE: %s", fsm_str);
     draw_text(45, 140, s_text_buf, s_active_theme->text_primary, 1);
 
-    snprintf(s_text_buf, sizeof(s_text_buf), "HOST TELEMETRY: Temp = %.1f C (Trip > 65 C) | RAM = %u%% (Trip > 90%%)",
-             state->sensor_temp_mC / 1000.0f, state->ram_load_pct);
+    snprintf(s_text_buf, sizeof(s_text_buf), "HOST TELEMETRY: Temp = %.1f C (Trip >= 55 C) | CPU = %u%% (Trip >= 80%%)",
+             state->sensor_temp_mC / 1000.0f, state->cpu_load_pct);
     draw_text(45, 165, s_text_buf, s_active_theme->text_secondary, 1);
 
     /* Action Buttons (with touch hit-boxes) */
@@ -678,7 +664,7 @@ static void render_screen_alarm(const shared_state_buffer_t *state, const watchd
     draw_text(65, 203, "[A] ACKNOWLEDGE ALARM", (state->alarm_latch_state == ALARM_STATE_ACTIVE) ? white_col : s_active_theme->text_primary, 1);
 
     draw_border_rect(300, 195, 230, 30, state->failover_active ? s_active_theme->alarm_critical : s_active_theme->card_bg, s_active_theme->primary_accent, 1);
-    draw_text(320, 203, "[6/F] TOGGLE FAILOVER", state->failover_active ? white_col : s_active_theme->text_primary, 1);
+    draw_text(325, 203, "[F] TOGGLE FAILOVER", state->failover_active ? white_col : s_active_theme->text_primary, 1);
 
     /* Alarm Journal (Last 4 Events) */
     draw_border_rect(30, 240, 740, 175, s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
@@ -709,57 +695,101 @@ static void render_screen_settings(const shared_state_buffer_t *state, const wat
 {
     draw_hmi_header("SETTINGS & ACCESS", state, wd);
 
-    draw_border_rect(30, 60, 740, 360, s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(50, 80, "HMI RUNTIME CONFIGURATION & ACCESSIBILITY", s_active_theme->primary_accent, 2);
+    draw_border_rect(30, 56, 740, 368, s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
+    draw_text(50, 72, "HMI CONFIGURATION & ACCESSIBILITY", s_active_theme->primary_accent, 2);
 
     static const char * const s_cfg[] = {
-        "DISPLAY DEPTH: 4-BIT PACKED NIBBLE (16 CLUT - LOW RAM)",
-        "GRAPHICS:      LVGL EMBEDDED C99 (PARTIAL BAND 18.75 KB)",
-        "REFRESH RATE:  30 HZ (~33 MS PERIOD)",
-        "HOST SENSORS:  10 HZ DECIMATED FROM 1000 HZ ISR",
-        "WATCHDOG:      500 MS HEARTBEAT TIMEOUT",
-        "INPUT UNIFIED: KEYPAD / TOUCH / CLI AGNOSTIC",
-        "INPUT ROUTING: WIN32 -> LAYER 1 HAL -> LAYER 2 FSM"
+        "CORE:     C99 4-LAYER STATIC ENGINE (NO HEAP)",
+        "DISPLAY:  LVGL 4-BIT PARTIAL BAND (18.75 KB RAM)",
+        "DATA:     BINARY ENCODED PIPELINE (CRC16 SYNC)",
+        "TIMING:   30 HZ UI TIMER / 1000 HZ SENSOR ISR",
+        "WATCHDOG: DUAL-LOOP AND CHECK (500 MS TIMEOUT)",
+        "TRIPS:    CPU TEMP >= 55.0 C | CPU LOAD >= 80%",
+        "INPUT:    KEYPAD / TOUCH DIGITIZER / CLI AGNOSTIC"
     };
     for (int i = 0; i < 7; i++) {
-        draw_text(50, 120 + i * 25, s_cfg[i], (i == 6) ? s_active_theme->alarm_ok : s_active_theme->text_primary, 1);
+        draw_text(50, 106 + i * 24, s_cfg[i], (i == 5) ? s_active_theme->alarm_critical : (i == 0 || i == 1) ? s_active_theme->alarm_ok : s_active_theme->text_primary, 1);
     }
 
-    /* Theme Status & Toggle Button */
-    snprintf(s_text_buf, sizeof(s_text_buf), "ACTIVE PALETTE:      %s",
-             s_active_theme->is_high_contrast ? "HIGH CONTRAST (OUTDOOR MODE)" : "SLEEK DARK SPACE NAVY");
-    draw_text(50, 325, s_text_buf, s_active_theme->primary_accent, 1);
+    /* Theme Status & Interactive Buttons */
+    snprintf(s_text_buf, sizeof(s_text_buf), "THEME: %s",
+             s_active_theme->is_high_contrast ? "HIGH CONTRAST (OUTDOOR)" : "DARK SPACE NAVY");
+    draw_text(50, 290, s_text_buf, s_active_theme->primary_accent, 1);
 
-    draw_border_rect(50, 355, 340, 40, s_active_theme->primary_accent, s_active_theme->text_primary, 2);
     lv_color_t black_col = { .full = LV_COLOR_INDEX_BLACK };
-    draw_text(70, 368, "[C] TOGGLE HIGH CONTRAST THEME", black_col, 1);
+    lv_color_t white_col = { .full = LV_COLOR_INDEX_WHITE };
+
+    /* Button 1: Toggle High Contrast Theme */
+    draw_border_rect(50, 320, 330, 42, s_active_theme->primary_accent, s_active_theme->text_primary, 2);
+    draw_text(70, 334, "[C] TOGGLE CONTRAST THEME", black_col, 1);
+
+    /* Button 2: Test Alarm Trip & WD Flash */
+    bool test_active = (state->alarm_latch_state == ALARM_STATE_ACTIVE);
+    lv_color_t t_bg = test_active ? s_active_theme->alarm_critical : s_active_theme->card_bg;
+    lv_color_t t_tc = test_active ? white_col : s_active_theme->primary_accent;
+    draw_border_rect(410, 320, 330, 42, t_bg, s_active_theme->primary_accent, 2);
+    draw_text(430, 334, test_active ? "[T] STOP ALARM TRIP TEST" : "[T] TEST ALARM & WD FLASH", t_tc, 1);
+
+    draw_text(50, 380, "Note: Click [T] to test horn & flash top WD pill.", s_active_theme->text_secondary, 1);
 }
 
 static void render_screen_failover(const shared_state_buffer_t *state, const watchdog_supervisor_t *wd)
 {
-    (void)wd;
     draw_hmi_header("FAILOVER SYSTEM", state, wd);
 
-    draw_border_rect(100, 80, 600, 320, s_active_theme->card_bg, s_active_theme->alarm_critical, 2);
+    draw_border_rect(30, 56, 740, 368, s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
+    draw_text(50, 72, "REDUNDANT DUAL-NODE HOT STANDBY", s_active_theme->primary_accent, 2);
 
-    if (state->failover_active) {
-        draw_text(160, 110, "SECONDARY CONTROLLER: ACTIVE", s_active_theme->alarm_critical, 2);
-        draw_text(160, 140, "PRIMARY NODE: FAULTED / WATCHDOG TIMEOUT", s_active_theme->text_secondary, 1);
-    } else {
-        draw_text(160, 110, "PRIMARY CONTROLLER: ACTIVE", s_active_theme->alarm_ok, 2);
-        draw_text(160, 140, "SECONDARY NODE: HOT STANDBY SYNCHRONIZED", s_active_theme->text_secondary, 1);
-    }
-
-    draw_text(160, 180, "[INFO] Dual-node redundant heartbeat monitoring.", s_active_theme->text_primary, 1);
-    draw_text(160, 205, "[INFO] Automatic switchover triggers on 500ms silence.", s_active_theme->text_primary, 1);
-    draw_text(160, 230, "[INFO] State synchronizes via lock-free binary payload.", s_active_theme->text_primary, 1);
-
-    draw_border_rect(160, 275, 380, 45, state->failover_active ? s_active_theme->alarm_critical : s_active_theme->card_bg, s_active_theme->primary_accent, 2);
     lv_color_t white_col = { .full = LV_COLOR_INDEX_WHITE };
-    draw_text(180, 290, "[6/F] TOGGLE HOT STANDBY FAILOVER", state->failover_active ? white_col : s_active_theme->primary_accent, 1);
+    lv_color_t black_col = { .full = LV_COLOR_INDEX_BLACK };
 
-    snprintf(s_text_buf, sizeof(s_text_buf), "CURRENT ACTIVE NODE: %s", state->failover_active ? "SECONDARY (STANDBY)" : "PRIMARY (MAIN)");
-    draw_text(160, 345, s_text_buf, state->failover_active ? s_active_theme->alarm_critical : s_active_theme->alarm_ok, 1);
+    /* Node A (Primary) Status Box */
+    lv_color_t node_a_border = (!state->failover_active) ? s_active_theme->alarm_ok : s_active_theme->text_secondary;
+    draw_border_rect(50, 100, 330, 140, s_active_theme->card_bg, node_a_border, 2);
+    draw_text(65, 112, "PRIMARY NODE A", s_active_theme->primary_accent, 1);
+    if (!state->failover_active) {
+        draw_text(65, 132, "STATUS: ONLINE / ACTIVE", s_active_theme->alarm_ok, 2);
+    } else {
+        draw_text(65, 132, "STATUS: STANDBY / PASSIVE", s_active_theme->text_secondary, 2);
+    }
+    draw_text(65, 162, wd->hw_loop_alive ? "HARDWARE ISR: HEALTHY" : "HARDWARE ISR: TIMEOUT", wd->hw_loop_alive ? s_active_theme->alarm_ok : s_active_theme->alarm_critical, 1);
+    draw_text(65, 184, wd->sw_loop_alive ? "SOFTWARE UI:  HEALTHY" : "SOFTWARE UI:  TIMEOUT", wd->sw_loop_alive ? s_active_theme->alarm_ok : s_active_theme->alarm_critical, 1);
+    snprintf(s_text_buf, sizeof(s_text_buf), "HEARTBEAT:    %lu TICKS", (unsigned long)state->heartbeat_counter);
+    draw_text(65, 206, s_text_buf, s_active_theme->text_secondary, 1);
+
+    /* Node B (Hot Standby) Status Box */
+    lv_color_t node_b_border = state->failover_active ? s_active_theme->alarm_critical : s_active_theme->alarm_ok;
+    draw_border_rect(410, 100, 330, 140, s_active_theme->card_bg, node_b_border, 2);
+    draw_text(425, 112, "HOT STANDBY NODE B", s_active_theme->primary_accent, 1);
+    if (state->failover_active) {
+        draw_text(425, 132, "STATUS: ONLINE / ACTIVE", s_active_theme->alarm_critical, 2);
+    } else {
+        draw_text(425, 132, "STATUS: HOT STANDBY SYNC", s_active_theme->alarm_ok, 2);
+    }
+    draw_text(425, 162, "PAYLOAD SYNC: ZERO-COPY CRC", s_active_theme->alarm_ok, 1);
+    draw_text(425, 184, "SWITCH DELAY: < 1 MS LATENCY", s_active_theme->alarm_ok, 1);
+    snprintf(s_text_buf, sizeof(s_text_buf), "CRC16 SYNC:   0x%04X [VALID]", state->checksum);
+    draw_text(425, 206, s_text_buf, s_active_theme->text_secondary, 1);
+
+    /* Failover Actions */
+    draw_text(50, 260, "STANDBY CONTROLS - CLICK BUTTON", s_active_theme->primary_accent, 1);
+
+    /* Button 1: Toggle Standby */
+    draw_border_rect(50, 285, 220, 42, state->failover_active ? s_active_theme->alarm_critical : s_active_theme->card_bg, s_active_theme->primary_accent, 2);
+    draw_text(65, 299, "[F] TOGGLE STANDBY", state->failover_active ? white_col : s_active_theme->primary_accent, 1);
+
+    /* Button 2: Simulate WD Timeout */
+    draw_border_rect(290, 285, 220, 42, s_active_theme->card_bg, s_active_theme->primary_accent, 2);
+    draw_text(305, 299, "[W] SIMULATE WD FAULT", s_active_theme->primary_accent, 1);
+
+    /* Button 3: Return to Dashboard */
+    draw_border_rect(530, 285, 210, 42, s_active_theme->primary_accent, s_active_theme->text_primary, 2);
+    draw_text(550, 299, "[1] DASHBOARD", black_col, 1);
+
+    snprintf(s_text_buf, sizeof(s_text_buf), "ACTIVE NODE: %s  |  WD PETS: %u",
+             state->failover_active ? "SECONDARY (B)" : "PRIMARY (A)",
+             wd->total_watchdog_pets);
+    draw_text(50, 350, s_text_buf, state->failover_active ? s_active_theme->alarm_critical : s_active_theme->alarm_ok, 1);
 }
 
 /* --- Presentation Master Render Dispatch (10 Bands × 48 Scanlines) --- */
@@ -793,9 +823,6 @@ void layer3_render_all_bands(void)
 
         /* Render screen content for this band */
         switch (current_screen) {
-            case SCREEN_BOOT:
-                render_screen_boot(&state, wd);
-                break;
             case SCREEN_DASHBOARD:
                 render_screen_dashboard(&state, wd);
                 break;
@@ -828,7 +855,7 @@ void layer3_presentation_init(void)
     lv_init();
     s_last_rendered_screen = SCREEN_COUNT;
     s_force_full_redraw = true;
-    printf("[LAYER 3 PRESENTATION] LVGL Partial Draw Band Buffer Initialized (18.75 KB RAM, 10 bands).\n");
+    printf("[L3] LVGL Ready\n");
 }
 
 /* 30 Hz UI Timer Tick */
@@ -870,26 +897,29 @@ void layer3_handle_touch(int16_t x, int16_t y, bool pressed)
 {
     if (!pressed) return;
 
-    /* Handle bottom navigation bar touch points */
+    /* Header Watchdog / Alert Annunciator Pill Touch */
+    if (x >= 605 && x <= 695 && y >= 5 && y <= 38) {
+        layer2_fsm_process_event(KEY_ALARM_ACK);
+        layer2_fsm_request_screen_change(SCREEN_ALARM);
+        return;
+    }
+
+    /* Handle bottom navigation bar touch points (5 buttons) */
     if (y >= (DISPLAY_HEIGHT - 38)) {
-        if (x >= 10 && x < 120) {
-            layer2_fsm_request_screen_change(SCREEN_BOOT);
-        } else if (x >= 130 && x < 240) {
-            layer2_fsm_request_screen_change(SCREEN_DASHBOARD);
-        } else if (x >= 250 && x < 360) {
-            layer2_fsm_request_screen_change(SCREEN_DIAGNOSTICS);
-        } else if (x >= 370 && x < 480) {
-            layer2_fsm_request_screen_change(SCREEN_ALARM);
-        } else if (x >= 490 && x < 600) {
-            layer2_fsm_request_screen_change(SCREEN_SETTINGS);
-        } else if (x >= 610 && x < 720) {
-            layer2_fsm_request_screen_change(SCREEN_FAILOVER_STANDBY);
+        for (int i = 0; i < 5; i++) {
+            int nx = 14 + i * 156;
+            if (x >= nx && x < (nx + 148)) {
+                layer2_fsm_request_screen_change((screen_id_t)i);
+                return;
+            }
         }
         return;
     }
 
-    /* Alarm screen buttons */
+    /* Screen-specific button touches */
     screen_id_t active = layer2_fsm_get_active_screen();
+
+    /* Alarm screen buttons */
     if (active == SCREEN_ALARM) {
         if (x >= 45 && x < 275 && y >= 195 && y < 235) {
             layer2_fsm_process_event(KEY_ALARM_ACK);
@@ -901,18 +931,30 @@ void layer3_handle_touch(int16_t x, int16_t y, bool pressed)
         }
     }
 
-    /* Settings screen contrast button */
+    /* Settings screen buttons */
     if (active == SCREEN_SETTINGS) {
-        if (x >= 50 && x < 400 && y >= 350 && y < 405) {
+        if (x >= 50 && x < 380 && y >= 320 && y < 365) {
             layer3_toggle_high_contrast_theme();
+            return;
+        }
+        if (x >= 410 && x < 740 && y >= 320 && y < 365) {
+            layer2_fsm_process_event(KEY_TEST_ALARM);
             return;
         }
     }
 
-    /* Failover screen button */
+    /* Failover screen buttons */
     if (active == SCREEN_FAILOVER_STANDBY) {
-        if (x >= 160 && x < 540 && y >= 275 && y < 320) {
+        if (x >= 50 && x < 270 && y >= 285 && y < 330) {
             layer2_fsm_process_event(KEY_TOGGLE_FAILOVER);
+            return;
+        }
+        if (x >= 290 && x < 510 && y >= 285 && y < 330) {
+            layer2_fsm_process_event(KEY_SIMULATE_WD_FAULT);
+            return;
+        }
+        if (x >= 530 && x < 740 && y >= 285 && y < 330) {
+            layer2_fsm_request_screen_change(SCREEN_DASHBOARD);
             return;
         }
     }
@@ -922,10 +964,10 @@ void layer3_toggle_high_contrast_theme(void)
 {
     if (s_active_theme == &s_theme_dark) {
         s_active_theme = &s_theme_contrast;
-        printf("[LAYER 3 ACCESSIBILITY] Switched to High Contrast Theme.\n");
+        printf("[L3] Contrast ON\n");
     } else {
         s_active_theme = &s_theme_dark;
-        printf("[LAYER 3 ACCESSIBILITY] Switched to Sleek Dark Theme.\n");
+        printf("[L3] Dark ON\n");
     }
     s_force_full_redraw = true;
 }

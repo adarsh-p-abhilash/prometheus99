@@ -36,8 +36,8 @@ static volatile uint32_t s_write_idx = 0;
 static watchdog_supervisor_t s_watchdog_supervisor;
 
 /* Static FSM state */
-static screen_id_t s_active_screen = SCREEN_BOOT;
-static screen_id_t s_previous_screen = SCREEN_BOOT;
+static screen_id_t s_active_screen = SCREEN_DASHBOARD;
+static screen_id_t s_previous_screen = SCREEN_DASHBOARD;
 
 /* Alarm latching state (persists across ISR cycles) */
 static alarm_latch_state_t s_alarm_latch = ALARM_STATE_CLEARED;
@@ -90,7 +90,7 @@ void layer2_core_init(void)
     /* Initialize both ping-pong slots */
     for (int i = 0; i < 2; i++) {
         s_ping_pong[i].magic_header = 0x50524F4D; /* 'PROM' */
-        s_ping_pong[i].active_screen = (uint8_t)SCREEN_BOOT;
+        s_ping_pong[i].active_screen = (uint8_t)SCREEN_DASHBOARD;
         s_ping_pong[i].dirty_flag = 1;
         s_ping_pong[i].heartbeat_counter = 0;
         s_ping_pong[i].alarm_latch_state = (uint8_t)ALARM_STATE_CLEARED;
@@ -102,12 +102,12 @@ void layer2_core_init(void)
     s_watchdog_supervisor.last_hw_ping_ms = layer0_get_system_time_ms();
     s_watchdog_supervisor.last_sw_ping_ms = layer0_get_system_time_ms();
 
-    s_active_screen = SCREEN_BOOT;
-    s_previous_screen = SCREEN_BOOT;
+    s_active_screen = SCREEN_DASHBOARD;
+    s_previous_screen = SCREEN_DASHBOARD;
     s_alarm_latch = ALARM_STATE_CLEARED;
     s_last_trend_push_ms = layer0_get_system_time_ms();
 
-    printf("[LAYER 2 CORE] Ping-pong state buffer, FSM, trend ring & alarm journal initialized.\n");
+    printf("[L2] Core Ready\n");
 }
 
 void layer2_update_state_binary(uint32_t temp_mC, uint32_t press_kPa, uint32_t rpm, uint32_t bus_mv,
@@ -138,21 +138,21 @@ void layer2_update_state_binary(uint32_t temp_mC, uint32_t press_kPa, uint32_t r
 
     /* --- Alarm Latching State Machine ---
      * Calibrated for Live Host Metrics:
-     * Critical: CPU Temp > 75 C OR System RAM > 95%
-     * Warning:  CPU Temp > 65 C OR CPU Load > 92% OR System RAM > 90% */
-    bool over_threshold = (temp_mC > 75000 || ram_load_pct > 95);
-    bool warn_threshold = (temp_mC > 65000 || cpu_load_pct > 92 || ram_load_pct > 90);
+     * Critical Trip: CPU Temp >= 55 C OR CPU Load >= 80%
+     * Warning:       CPU Temp >= 48 C OR CPU Load >= 65% OR System RAM >= 90% */
+    bool over_threshold = (temp_mC >= 55000 || cpu_load_pct >= 80);
+    bool warn_threshold = (temp_mC >= 48000 || cpu_load_pct >= 65 || ram_load_pct >= 90);
 
     switch (s_alarm_latch) {
         case ALARM_STATE_CLEARED:
             if (over_threshold) {
                 s_alarm_latch = ALARM_STATE_ACTIVE;
                 buf->alarm_severity = (uint8_t)ALARM_CRITICAL;
-                push_alarm_log(now, ALARM_CRITICAL, ALARM_STATE_ACTIVE, "HOST THERMAL/RAM CRITICAL");
+                push_alarm_log(now, ALARM_CRITICAL, ALARM_STATE_ACTIVE, "TRIP: CPU >= 55C / 80%");
             } else if (warn_threshold) {
                 s_alarm_latch = ALARM_STATE_ACTIVE;
                 buf->alarm_severity = (uint8_t)ALARM_WARNING;
-                push_alarm_log(now, ALARM_WARNING, ALARM_STATE_ACTIVE, "HOST HIGH LOAD WARNING");
+                push_alarm_log(now, ALARM_WARNING, ALARM_STATE_ACTIVE, "WARN: HIGH CPU LOAD");
             } else {
                 buf->alarm_severity = (uint8_t)ALARM_NONE;
             }
@@ -239,7 +239,6 @@ screen_id_t layer2_fsm_get_active_screen(void)
 bool layer2_fsm_request_screen_change(screen_id_t new_screen)
 {
     if (new_screen >= SCREEN_COUNT) {
-        printf("[LAYER 2 FSM] Rejected screen change: Out of bounds (%d)\n", new_screen);
         return false;
     }
 
@@ -256,7 +255,7 @@ bool layer2_fsm_request_screen_change(screen_id_t new_screen)
     s_ping_pong[0].dirty_flag = 1;
     s_ping_pong[1].dirty_flag = 1;
 
-    printf("[LAYER 2 FSM] Screen Transition: %d -> %d\n", s_previous_screen, s_active_screen);
+    printf("[FSM] %d->%d\n", s_previous_screen, s_active_screen);
     return true;
 }
 
@@ -267,9 +266,9 @@ void layer2_fsm_process_event(input_key_t key_event)
     /* Global key bindings */
     if (key_event == KEY_TOGGLE_FAILOVER) {
         if (s_active_screen == SCREEN_FAILOVER_STANDBY) {
-            layer2_fsm_request_screen_change(s_previous_screen);
-            s_ping_pong[0].failover_active = 0;
-            s_ping_pong[1].failover_active = 0;
+            uint8_t fo = !s_ping_pong[0].failover_active;
+            s_ping_pong[0].failover_active = fo;
+            s_ping_pong[1].failover_active = fo;
         } else {
             layer2_fsm_request_screen_change(SCREEN_FAILOVER_STANDBY);
             s_ping_pong[0].failover_active = 1;
@@ -278,39 +277,57 @@ void layer2_fsm_process_event(input_key_t key_event)
         return;
     }
 
+    if (key_event == KEY_SIMULATE_WD_FAULT) {
+        s_watchdog_supervisor.last_hw_ping_ms = 0;
+        s_watchdog_supervisor.system_healthy = false;
+        s_watchdog_supervisor.hw_loop_alive = false;
+        s_watchdog_supervisor.watchdog_fault_count++;
+        layer2_fsm_request_screen_change(SCREEN_FAILOVER_STANDBY);
+        s_ping_pong[0].failover_active = 1;
+        s_ping_pong[1].failover_active = 1;
+        return;
+    }
+
+    if (key_event == KEY_TEST_ALARM) {
+        if (s_alarm_latch == ALARM_STATE_CLEARED) {
+            s_alarm_latch = ALARM_STATE_ACTIVE;
+            s_ping_pong[0].alarm_latch_state = (uint8_t)ALARM_STATE_ACTIVE;
+            s_ping_pong[1].alarm_latch_state = (uint8_t)ALARM_STATE_ACTIVE;
+            s_ping_pong[0].alarm_severity = (uint8_t)ALARM_CRITICAL;
+            s_ping_pong[1].alarm_severity = (uint8_t)ALARM_CRITICAL;
+            push_alarm_log(layer0_get_system_time_ms(), ALARM_CRITICAL, ALARM_STATE_ACTIVE, "TEST TRIP ACTIVE");
+        } else {
+            s_alarm_latch = ALARM_STATE_CLEARED;
+            s_ping_pong[0].alarm_latch_state = (uint8_t)ALARM_STATE_CLEARED;
+            s_ping_pong[1].alarm_latch_state = (uint8_t)ALARM_STATE_CLEARED;
+            s_ping_pong[0].alarm_severity = (uint8_t)ALARM_NONE;
+            s_ping_pong[1].alarm_severity = (uint8_t)ALARM_NONE;
+            push_alarm_log(layer0_get_system_time_ms(), ALARM_NONE, ALARM_STATE_CLEARED, "TEST CLEARED");
+        }
+        return;
+    }
+
     if (key_event == KEY_ALARM_ACK) {
-        /* Alarm Latching FSM: ACTIVE -> ACKNOWLEDGED
-         * This is the fix: we transition the latch state instead of
-         * clearing alarm_severity directly. The ISR will NOT overwrite
-         * the ACKNOWLEDGED state — it stays latched until the sensor
-         * condition clears. */
+        /* Alarm Latching FSM: ACTIVE -> ACKNOWLEDGED */
         if (s_alarm_latch == ALARM_STATE_ACTIVE) {
             s_alarm_latch = ALARM_STATE_ACKNOWLEDGED;
             s_ping_pong[0].alarm_latch_state = (uint8_t)ALARM_STATE_ACKNOWLEDGED;
             s_ping_pong[1].alarm_latch_state = (uint8_t)ALARM_STATE_ACKNOWLEDGED;
             push_alarm_log(layer0_get_system_time_ms(), 
                           s_ping_pong[s_write_idx].alarm_severity,
-                          ALARM_STATE_ACKNOWLEDGED, "USER ACKNOWLEDGED");
-            printf("[LAYER 2 FSM] Alarm Acknowledged. Awaiting condition clearance.\n");
-        } else {
-            printf("[LAYER 2 FSM] No active alarm to acknowledge (state=%d).\n", s_alarm_latch);
+                          ALARM_STATE_ACKNOWLEDGED, "ACKNOWLEDGED");
+            printf("[FSM] Alarm Acked\n");
         }
         return;
     }
 
     /* Screen-specific state navigation */
     switch (s_active_screen) {
-        case SCREEN_BOOT:
-            if (key_event == KEY_SELECT || key_event == KEY_NEXT) {
-                layer2_fsm_request_screen_change(SCREEN_DASHBOARD);
-            }
-            break;
-
         case SCREEN_DASHBOARD:
             if (key_event == KEY_NEXT) {
                 layer2_fsm_request_screen_change(SCREEN_DIAGNOSTICS);
             } else if (key_event == KEY_PREV) {
-                layer2_fsm_request_screen_change(SCREEN_SETTINGS);
+                layer2_fsm_request_screen_change(SCREEN_FAILOVER_STANDBY);
             } else if (key_event == KEY_SELECT) {
                 layer2_fsm_request_screen_change(SCREEN_ALARM);
             }
@@ -338,7 +355,7 @@ void layer2_fsm_process_event(input_key_t key_event)
 
         case SCREEN_SETTINGS:
             if (key_event == KEY_NEXT) {
-                layer2_fsm_request_screen_change(SCREEN_DASHBOARD);
+                layer2_fsm_request_screen_change(SCREEN_FAILOVER_STANDBY);
             } else if (key_event == KEY_PREV) {
                 layer2_fsm_request_screen_change(SCREEN_ALARM);
             } else if (key_event == KEY_BACK) {
@@ -347,10 +364,12 @@ void layer2_fsm_process_event(input_key_t key_event)
             break;
 
         case SCREEN_FAILOVER_STANDBY:
-            if (key_event == KEY_SELECT || key_event == KEY_BACK) {
+            if (key_event == KEY_NEXT) {
                 layer2_fsm_request_screen_change(SCREEN_DASHBOARD);
-                s_ping_pong[0].failover_active = 0;
-                s_ping_pong[1].failover_active = 0;
+            } else if (key_event == KEY_PREV) {
+                layer2_fsm_request_screen_change(SCREEN_SETTINGS);
+            } else if (key_event == KEY_BACK || key_event == KEY_SELECT) {
+                layer2_fsm_request_screen_change(SCREEN_DASHBOARD);
             }
             break;
 
@@ -386,8 +405,7 @@ void layer2_watchdog_supervisor_tick(void)
         s_watchdog_supervisor.total_watchdog_pets++;
     } else {
         /* Watchdog Fault Detected! */
-        s_watchdog_supervisor.watchdog_fault_count++;
-        printf("[WATCHDOG SUPERVISOR] WARNING: Dual-loop AND check failed! HW Alive: %d, SW Alive: %d\n",
+        printf("[WD] Fail HW:%d SW:%d\n",
                s_watchdog_supervisor.hw_loop_alive, s_watchdog_supervisor.sw_loop_alive);
         
         /* Auto-engage Hot Standby Failover FSM mode */

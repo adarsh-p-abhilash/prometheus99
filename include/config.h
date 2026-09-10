@@ -45,8 +45,7 @@
 
 /* --- Pre-Allocated Screen Identifiers --- */
 typedef enum {
-    SCREEN_BOOT = 0,
-    SCREEN_DASHBOARD,
+    SCREEN_DASHBOARD = 0,
     SCREEN_DIAGNOSTICS,
     SCREEN_ALARM,
     SCREEN_SETTINGS,
@@ -63,7 +62,9 @@ typedef enum {
     KEY_BACK,
     KEY_ALARM_ACK,
     KEY_TOGGLE_FAILOVER,
-    KEY_TOGGLE_CONTRAST
+    KEY_TOGGLE_CONTRAST,
+    KEY_TEST_ALARM,
+    KEY_SIMULATE_WD_FAULT
 } input_key_t;
 
 /* --- Alarm Severity Levels --- */
