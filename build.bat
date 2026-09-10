@@ -5,8 +5,8 @@ echo =================================================================
 
 set PATH=C:\msys64\mingw64\bin;%PATH%
 
-echo [BUILD] Compiling C99 sources...
-gcc -std=c99 -Wall -Wextra -O2 -Iinclude ^
+echo [BUILD] Compiling C99 sources into standalone static binary...
+gcc -std=c99 -Wall -Wextra -O2 -static -Iinclude ^
     src/layer0_hardware.c ^
     src/layer1_hal.c ^
     src/layer2_core.c ^
@@ -20,5 +20,5 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
-echo [SUCCESS] Build succeeded! Created prometheus99.exe
+echo [SUCCESS] Build succeeded! Created self-contained standalone prometheus99.exe
 echo =================================================================

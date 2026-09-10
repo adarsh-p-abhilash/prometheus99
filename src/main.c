@@ -180,6 +180,11 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    ShowWindow(s_hwnd, SW_SHOWNORMAL);
+    UpdateWindow(s_hwnd);
+    SetForegroundWindow(s_hwnd);
+    SetFocus(s_hwnd);
+
     printf("[INIT] GUI Window Created (800x480 Resolution).\n");
 
     /* Launch 1000 Hz Sensor ISR Background Thread */
