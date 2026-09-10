@@ -14,12 +14,20 @@ static uint64_t s_last_hardware_pet_ms = 0;
 static bool s_hardware_watchdog_tripped = false;
 static uint32_t s_isr_counter = 0;
 
+/* QPC frequency is fixed at boot; querying it per call doubled the cost of a
+ * helper invoked ~3000x/sec from the 1000 Hz ISR path. */
+static LONGLONG s_qpc_freq = 0;
+
 uint64_t layer0_get_system_time_ms(void)
 {
-    LARGE_INTEGER freq, count;
-    QueryPerformanceFrequency(&freq);
+    LARGE_INTEGER count;
+    if (s_qpc_freq == 0) {
+        LARGE_INTEGER freq;
+        QueryPerformanceFrequency(&freq);
+        s_qpc_freq = freq.QuadPart;
+    }
     QueryPerformanceCounter(&count);
-    return (uint64_t)((count.QuadPart * 1000) / freq.QuadPart);
+    return (uint64_t)((count.QuadPart * 1000) / s_qpc_freq);
 }
 
 void layer0_hardware_init(void)
@@ -28,6 +36,7 @@ void layer0_hardware_init(void)
     s_last_hardware_pet_ms = s_boot_time_ms;
     s_hardware_watchdog_tripped = false;
     s_isr_counter = 0;
+    srand((unsigned int)time(NULL));
     printf("[LAYER 0 HAL] Hardware I/O initialized. System timer zeroed.\n");
 }
 
@@ -57,7 +66,6 @@ void layer0_read_raw_sensors(raw_hardware_sensors_t *sensors)
     sensors->raw_adc_temp = raw_temp;
     sensors->raw_adc_pressure = raw_press;
     sensors->raw_adc_rpm = raw_rpm;
-    sensors->raw_adc_bus_v = raw_v;
     sensors->raw_adc_bus_v = raw_v;
     sensors->interrupt_counter = s_isr_counter;
 }

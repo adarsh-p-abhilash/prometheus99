@@ -8,27 +8,57 @@
 #include "../include/layer1_hal.h"
 #include <stdio.h>
 #include <string.h>
+#include <windows.h>
 
 /* Static pre-allocated Shared State Buffer (Zero Heap Allocation) */
 static shared_state_buffer_t s_shared_state_buffer;
 static watchdog_supervisor_t s_watchdog_supervisor;
 
+/*
+ * The Shared State Buffer is written by the 1000 Hz sensor ISR thread and read
+ * by the 30 Hz presentation thread. This lock keeps each reader/writer from
+ * observing a half-updated packet (torn 64-bit timestamp, mismatched fields).
+ */
+static CRITICAL_SECTION s_state_lock;
+static bool s_state_lock_ready = false;
+
 /* Static FSM state */
 static screen_id_t s_active_screen = SCREEN_BOOT;
 static screen_id_t s_previous_screen = SCREEN_BOOT;
 
-/* Binary CRC16 / Checksum calculation for data integrity */
+/*
+ * CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) over the packed payload.
+ * Previously a plain additive byte sum labelled "CRC16" in the UI, which would
+ * not detect byte reordering or compensating errors.
+ */
 static uint16_t compute_binary_checksum(const uint8_t *data, size_t len)
 {
-    uint16_t sum = 0;
+    uint16_t crc = 0xFFFF;
     for (size_t i = 0; i < len; i++) {
-        sum = (uint16_t)(sum + data[i]);
+        crc ^= (uint16_t)((uint16_t)data[i] << 8);
+        for (int bit = 0; bit < 8; bit++) {
+            crc = (crc & 0x8000u) ? (uint16_t)((uint16_t)(crc << 1) ^ 0x1021u)
+                                  : (uint16_t)(crc << 1);
+        }
     }
-    return sum;
+    return crc;
+}
+
+/* Guarded single-byte write shared with the 1000 Hz ISR reader. */
+static void set_failover_flag(uint8_t value)
+{
+    EnterCriticalSection(&s_state_lock);
+    s_shared_state_buffer.failover_active = value;
+    LeaveCriticalSection(&s_state_lock);
 }
 
 void layer2_core_init(void)
 {
+    if (!s_state_lock_ready) {
+        InitializeCriticalSection(&s_state_lock);
+        s_state_lock_ready = true;
+    }
+
     memset(&s_shared_state_buffer, 0, sizeof(s_shared_state_buffer));
     memset(&s_watchdog_supervisor, 0, sizeof(s_watchdog_supervisor));
 
@@ -53,6 +83,8 @@ void layer2_update_state_binary(uint32_t temp_mC, uint32_t press_kPa, uint32_t r
 {
     uint64_t now = layer0_get_system_time_ms();
 
+    EnterCriticalSection(&s_state_lock);
+
     s_shared_state_buffer.timestamp_ms = now;
     s_shared_state_buffer.sensor_temp_mC = temp_mC;
     s_shared_state_buffer.sensor_pressure_kPa = press_kPa;
@@ -70,9 +102,11 @@ void layer2_update_state_binary(uint32_t temp_mC, uint32_t press_kPa, uint32_t r
         s_shared_state_buffer.alarm_severity = (uint8_t)ALARM_NONE;
     }
 
-    /* Update binary payload checksum */
-    size_t payload_len = sizeof(shared_state_buffer_t) - sizeof(uint16_t);
-    s_shared_state_buffer.checksum = compute_binary_checksum((const uint8_t*)&s_shared_state_buffer, payload_len);
+    /* NOTE: the CRC is deliberately NOT computed here. This runs 1000x/sec but
+     * the checksum is only ever consumed by a 30 Hz reader, so it is calculated
+     * once per snapshot in layer2_copy_state_buffer() instead. */
+
+    LeaveCriticalSection(&s_state_lock);
 }
 
 const shared_state_buffer_t* layer2_get_state_buffer(void)
@@ -80,13 +114,26 @@ const shared_state_buffer_t* layer2_get_state_buffer(void)
     return &s_shared_state_buffer;
 }
 
+void layer2_copy_state_buffer(shared_state_buffer_t *out)
+{
+    if (!out) return;
+    EnterCriticalSection(&s_state_lock);
+    memcpy(out, &s_shared_state_buffer, sizeof(*out));
+    LeaveCriticalSection(&s_state_lock);
+
+    /* Seal the snapshot outside the lock: the CRC covers everything but itself. */
+    out->checksum = compute_binary_checksum((const uint8_t *)out,
+                                            sizeof(*out) - sizeof(out->checksum));
+}
+
 bool layer2_consume_dirty_flag(void)
 {
-    if (s_shared_state_buffer.dirty_flag) {
-        s_shared_state_buffer.dirty_flag = 0;
-        return true;
-    }
-    return false;
+    bool was_dirty;
+    EnterCriticalSection(&s_state_lock);
+    was_dirty = (s_shared_state_buffer.dirty_flag != 0);
+    s_shared_state_buffer.dirty_flag = 0;
+    LeaveCriticalSection(&s_state_lock);
+    return was_dirty;
 }
 
 screen_id_t layer2_fsm_get_active_screen(void)
@@ -107,8 +154,12 @@ bool layer2_fsm_request_screen_change(screen_id_t new_screen)
 
     s_previous_screen = s_active_screen;
     s_active_screen = new_screen;
+
+    /* Recursive CRITICAL_SECTION: safe even when called from layer2_fsm_process_event. */
+    EnterCriticalSection(&s_state_lock);
     s_shared_state_buffer.active_screen = (uint8_t)new_screen;
     s_shared_state_buffer.dirty_flag = 1;
+    LeaveCriticalSection(&s_state_lock);
 
     printf("[LAYER 2 FSM] Screen Transition: %d -> %d\n", s_previous_screen, s_active_screen);
     return true;
@@ -122,16 +173,17 @@ void layer2_fsm_process_event(input_key_t key_event)
     if (key_event == KEY_TOGGLE_FAILOVER) {
         if (s_active_screen == SCREEN_FAILOVER_STANDBY) {
             layer2_fsm_request_screen_change(s_previous_screen);
-            s_shared_state_buffer.failover_active = 0;
         } else {
             layer2_fsm_request_screen_change(SCREEN_FAILOVER_STANDBY);
-            s_shared_state_buffer.failover_active = 1;
         }
+        set_failover_flag((s_active_screen == SCREEN_FAILOVER_STANDBY) ? 1 : 0);
         return;
     }
 
     if (key_event == KEY_ALARM_ACK) {
+        EnterCriticalSection(&s_state_lock);
         s_shared_state_buffer.alarm_severity = (uint8_t)ALARM_NONE;
+        LeaveCriticalSection(&s_state_lock);
         printf("[LAYER 2 FSM] Alarm Acknowledged by User Key.\n");
         return;
     }
@@ -187,7 +239,7 @@ void layer2_fsm_process_event(input_key_t key_event)
         case SCREEN_FAILOVER_STANDBY:
             if (key_event == KEY_SELECT || key_event == KEY_BACK) {
                 layer2_fsm_request_screen_change(SCREEN_DASHBOARD);
-                s_shared_state_buffer.failover_active = 0;
+                set_failover_flag(0);
             }
             break;
 
@@ -230,7 +282,7 @@ void layer2_watchdog_supervisor_tick(void)
         /* Auto-engage Hot Standby Failover FSM mode */
         if (s_active_screen != SCREEN_FAILOVER_STANDBY) {
             layer2_fsm_request_screen_change(SCREEN_FAILOVER_STANDBY);
-            s_shared_state_buffer.failover_active = 1;
+            set_failover_flag(1);
         }
     }
 }

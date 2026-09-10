@@ -18,8 +18,30 @@
 /* --- Display Specifications --- */
 #define DISPLAY_WIDTH          800
 #define DISPLAY_HEIGHT         480
-#define DISPLAY_COLOR_DEPTH    32     /* ARGB8888 / RGB888 32-bit color format */
-#define DISPLAY_BUF_SIZE       (DISPLAY_WIDTH * DISPLAY_HEIGHT)
+#define DISPLAY_COLOR_DEPTH    8      /* 8bpp palettized (indexed) colour */
+/* DIB scanlines are DWORD-aligned; 800 is already a multiple of 4. */
+#define DISPLAY_STRIDE         ((DISPLAY_WIDTH + 3) & ~3)
+#define DISPLAY_BUF_SIZE       (DISPLAY_STRIDE * DISPLAY_HEIGHT)
+
+/*
+ * --- Palette Slots ---
+ * The framebuffer stores one byte per pixel: an index into the active palette.
+ * Drawing code names a *semantic role*, never a literal colour, so switching
+ * theme is a palette rewrite (SetDIBColorTable) rather than a re-render.
+ */
+typedef enum {
+    PAL_BG = 0,          /* Screen background */
+    PAL_CARD,            /* Card / panel fill */
+    PAL_PRIMARY,         /* Primary accent */
+    PAL_SECONDARY,       /* Secondary accent */
+    PAL_TEXT,            /* Primary text */
+    PAL_TEXT_DIM,        /* Secondary / muted text */
+    PAL_ALARM_CRIT,      /* Critical alarm */
+    PAL_ALARM_OK,        /* Healthy / nominal */
+    PAL_BLACK,           /* Text on a light fill */
+    PAL_WHITE,           /* Text on a dark fill */
+    PAL_COUNT
+} palette_index_t;
 
 /* --- Timing Specifications --- */
 #define SENSOR_ISR_FREQ_HZ     1000   /* Layer 1: Sensor & Fieldbus ISR (1000 Hz / 1 ms tick) */

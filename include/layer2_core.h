@@ -46,6 +46,8 @@ void layer2_core_init(void);
 /* Shared State Management & Binary Serialization */
 void layer2_update_state_binary(uint32_t temp_mC, uint32_t press_kPa, uint32_t rpm, uint32_t bus_mv);
 const shared_state_buffer_t* layer2_get_state_buffer(void);
+/* Thread-safe snapshot copy for cross-thread readers (e.g. the 30 Hz UI loop). */
+void layer2_copy_state_buffer(shared_state_buffer_t *out);
 bool layer2_consume_dirty_flag(void);
 
 /* FSM Controller */
