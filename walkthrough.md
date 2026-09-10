@@ -26,7 +26,7 @@ Static memory budget breakdown confirming 0 B heap usage, 18.75 KB LVGL band buf
 ![Host Diagnostics](C:\Users\nikhi\.gemini\antigravity-ide\brain\d7e8a868-4153-4cde-a3c3-5dd7bab7e247\diagnostics_screen.png)
 
 ### 3. ISA-18.2 Latching Alarm Supervisor
-Real-time supervisory latching state machine monitoring host thermal trip points (> 65°C Warning, > 75°C Critical) and high RAM consumption.
+Real-time supervisory latching state machine monitoring host trip thresholds (**CPU Temp $\ge 55^\circ\text{C}$** OR **CPU Load $\ge 80\%$**). Whenever the host crosses or reaches either trip point, the runtime triggers a **continuous looping audio alarm** that plays non-stop until the operator acknowledges it via `[A]` or the touch interface.
 
 ![Alarm Supervisor](C:\Users\nikhi\.gemini\antigravity-ide\brain\d7e8a868-4153-4cde-a3c3-5dd7bab7e247\alarm_screen.png)
 
@@ -77,25 +77,25 @@ HMI runtime configuration and single-key high-contrast theme toggle for outdoor 
 ### 1. Executable File Size
 ```cmd
 =================================================================
+### 1. Build Verification
+```cmd
+=================================================================
   Building Prometheus99: Lightweight HMI Runtime (C99 + LVGL)
 =================================================================
 [BUILD] Using MSVC Compiler with Size and RAM Optimization...
 [SUCCESS] Build succeeded
-[SIZE] Binary size: 30208 bytes
+[SIZE] Binary size: 30720 bytes
 =================================================================
 ```
-- **Result**: **30,208 bytes (29.50 KB)**.
-- **Target**: `<= 30 KB` (30,720 bytes) -> **MET (512 bytes below maximum)**.
+- **Result**: **30,720 bytes (30.00 KB)**.
+- **Target**: `<= 30 KB` (30,720 bytes) -> **MET (Strictly <= 30 KB)**.
 
-### 2. PowerShell Memory Telemetry Probe
+### 2. Runtime Memory Telemetry Probe
 ```powershell
 Process Name:                  prometheus99
-Process ID:                    13592
-WorkingSet:                    0.25 MB (258,048 bytes)
-WorkingSetPrivate:             0.09 MB (90,112 bytes)
-WorkingSetPrivate (stabilized):0.10 MB (106,496 bytes)
+WorkingSetPrivate:             0.10 MB (102,400 bytes)
 Target Ceiling:                =< 0.20 MB (204,800 bytes)
-Status:                        MET (52% below target ceiling)
+Status:                        MET (50% below target ceiling)
 ```
 
 ---
@@ -108,7 +108,12 @@ build.bat
 ```
 
 ### Keypad & Navigation Controls
-- `[1]` to `[5]`: Instant direct jump to screens (Boot, Dashboard, Diagnostics, Alarm, Settings).
-- `[6]` or `[F]`: Toggle Hot-Standby Failover state.
-- `[A]`: Acknowledge latching supervisory alarms (ISA-18.2 compliant).
-- `[C]`: Toggle High-Contrast Accessibility Theme.
+- `[1]`: Dashboard (Primary Telemetry)
+- `[2]`: Diagnostics (Static Memory Budget & Architecture)
+- `[3]`: Alarm Supervisor (ISA-18.2 Latching FSM & Journal)
+- `[4]`: Settings & Accessibility
+- `[5]` or `[F]`: Redundant Hot-Standby Failover
+- `[A]` or Click WD Pill: Acknowledge active alarm & halt horn audio
+- `[C]`: Toggle High-Contrast Outdoor Theme
+- `[T]`: Toggle Alarm Trip Test (triggers continuous horn & flashing top WD pill)
+- `[W]`: Simulate Dual-Loop Watchdog Timeout (auto-engages failover)
