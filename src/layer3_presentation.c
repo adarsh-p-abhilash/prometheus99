@@ -7,6 +7,7 @@
 #include "../include/layer0_hardware.h"
 #include "../include/layer1_hal.h"
 #include "../include/layer2_core.h"
+#include "../include/lvgl.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -217,18 +218,21 @@ static void draw_hmi_header(const char *screen_title, const shared_state_buffer_
     draw_rect(0, 0, DISPLAY_WIDTH, 42, s_active_theme->card_bg);
     draw_rect(0, 41, DISPLAY_WIDTH, 1, s_active_theme->primary_accent);
 
-    draw_text(16, 12, "PROMETHEUS99 | HMI RUNTIME", s_active_theme->primary_accent, 2);
-    draw_text(380, 15, screen_title, s_active_theme->text_primary, 2);
+    /* Left Logo */
+    draw_text(16, 12, "PROMETHEUS99", s_active_theme->primary_accent, 2);
 
-    /* Heartbeat Indicator Badge */
-    char hb_buf[32];
-    snprintf(hb_buf, sizeof(hb_buf), "FRAME: %lu", (unsigned long)state->heartbeat_counter);
-    draw_text(670, 15, hb_buf, s_active_theme->text_secondary, 1);
+    /* Active Screen Title */
+    draw_text(190, 15, screen_title, s_active_theme->text_primary, 1);
 
     /* Watchdog Health Pill */
     uint32_t wd_color = wd->system_healthy ? s_active_theme->alarm_ok : s_active_theme->alarm_critical;
-    draw_border_rect(580, 10, 80, 22, wd_color, s_active_theme->text_primary, 1);
-    draw_text(586, 14, wd->system_healthy ? "WD: OK" : "WD: TRIP", 0xFF000000, 1);
+    draw_border_rect(540, 9, 95, 24, wd_color, s_active_theme->text_primary, 1);
+    draw_text(552, 14, wd->system_healthy ? "WD: OK" : "WD: TRIP", 0xFF000000, 1);
+
+    /* Heartbeat Frame Counter Badge */
+    char hb_buf[32];
+    snprintf(hb_buf, sizeof(hb_buf), "FRAME: %lu", (unsigned long)state->heartbeat_counter);
+    draw_text(650, 15, hb_buf, s_active_theme->text_secondary, 1);
 
     /* Bottom Navigation Bar */
     draw_rect(0, DISPLAY_HEIGHT - 38, DISPLAY_WIDTH, 38, s_active_theme->card_bg);
@@ -236,22 +240,22 @@ static void draw_hmi_header(const char *screen_title, const shared_state_buffer_
 
     screen_id_t active = (screen_id_t)state->active_screen;
     draw_border_rect(10, DISPLAY_HEIGHT - 32, 110, 26, (active == SCREEN_BOOT) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(25, DISPLAY_HEIGHT - 25, "1:BOOT", (active == SCREEN_BOOT) ? 0xFF000000 : s_active_theme->text_primary, 1);
+    draw_text(47, DISPLAY_HEIGHT - 23, "1:BOOT", (active == SCREEN_BOOT) ? 0xFF000000 : s_active_theme->text_primary, 1);
 
     draw_border_rect(130, DISPLAY_HEIGHT - 32, 110, 26, (active == SCREEN_DASHBOARD) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(142, DISPLAY_HEIGHT - 25, "2:DASHBOARD", (active == SCREEN_DASHBOARD) ? 0xFF000000 : s_active_theme->text_primary, 1);
+    draw_text(152, DISPLAY_HEIGHT - 23, "2:DASHBOARD", (active == SCREEN_DASHBOARD) ? 0xFF000000 : s_active_theme->text_primary, 1);
 
     draw_border_rect(250, DISPLAY_HEIGHT - 32, 110, 26, (active == SCREEN_DIAGNOSTICS) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(258, DISPLAY_HEIGHT - 25, "3:DIAGNOST", (active == SCREEN_DIAGNOSTICS) ? 0xFF000000 : s_active_theme->text_primary, 1);
+    draw_text(275, DISPLAY_HEIGHT - 23, "3:DIAGNOST", (active == SCREEN_DIAGNOSTICS) ? 0xFF000000 : s_active_theme->text_primary, 1);
 
     draw_border_rect(370, DISPLAY_HEIGHT - 32, 110, 26, (active == SCREEN_ALARM) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(388, DISPLAY_HEIGHT - 25, "4:ALARM", (active == SCREEN_ALARM) ? 0xFF000000 : s_active_theme->text_primary, 1);
+    draw_text(404, DISPLAY_HEIGHT - 23, "4:ALARM", (active == SCREEN_ALARM) ? 0xFF000000 : s_active_theme->text_primary, 1);
 
     draw_border_rect(490, DISPLAY_HEIGHT - 32, 110, 26, (active == SCREEN_SETTINGS) ? s_active_theme->primary_accent : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(502, DISPLAY_HEIGHT - 25, "5:SETTINGS", (active == SCREEN_SETTINGS) ? 0xFF000000 : s_active_theme->text_primary, 1);
+    draw_text(515, DISPLAY_HEIGHT - 23, "5:SETTINGS", (active == SCREEN_SETTINGS) ? 0xFF000000 : s_active_theme->text_primary, 1);
 
     draw_border_rect(610, DISPLAY_HEIGHT - 32, 110, 26, (active == SCREEN_FAILOVER_STANDBY) ? s_active_theme->alarm_critical : s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-    draw_text(622, DISPLAY_HEIGHT - 25, "6:FAILOVER", (active == SCREEN_FAILOVER_STANDBY) ? 0xFFFFFFFF : s_active_theme->text_primary, 1);
+    draw_text(635, DISPLAY_HEIGHT - 23, "6:FAILOVER", (active == SCREEN_FAILOVER_STANDBY) ? 0xFFFFFFFF : s_active_theme->text_primary, 1);
 }
 
 /* --- Pre-Allocated Screen Renders --- */
@@ -396,11 +400,13 @@ static void render_screen_alarm(const shared_state_buffer_t *state, const watchd
 
     draw_text(50, 240, "ACTIONS & CONTROLS:", s_active_theme->text_primary, 2);
 
-    draw_border_rect(50, 275, 240, 50, s_active_theme->primary_accent, s_active_theme->text_primary, 1);
-    draw_text(70, 292, "[A] ACKNOWLEDGE ALARM", 0xFF000000, 2);
+    /* Button 1: Acknowledge Alarm (Width: 320, Text Centered) */
+    draw_border_rect(40, 275, 310, 50, s_active_theme->primary_accent, s_active_theme->text_primary, 1);
+    draw_text(69, 293, "[A] ACKNOWLEDGE ALARM", 0xFF000000, 2);
 
-    draw_border_rect(310, 275, 240, 50, s_active_theme->alarm_critical, s_active_theme->text_primary, 1);
-    draw_text(330, 292, "[F] ENGAGE FAILOVER", 0xFFFFFFFF, 2);
+    /* Button 2: Engage Failover (Width: 310, Text Centered) */
+    draw_border_rect(380, 275, 310, 50, s_active_theme->alarm_critical, s_active_theme->text_primary, 1);
+    draw_text(421, 293, "[F] ENGAGE FAILOVER", 0xFFFFFFFF, 2);
 
     draw_text(50, 350, "PRESS [A] ON KEYBOARD OR TOUCH TO ACKNOWLEDGE ALARMS", s_active_theme->text_secondary, 1);
 }
@@ -412,22 +418,22 @@ static void render_screen_settings(const shared_state_buffer_t *state, const wat
     draw_border_rect(20, 55, 760, 375, s_active_theme->card_bg, s_active_theme->primary_accent, 1);
     draw_text(35, 70, "HMI RUNTIME PREFERENCES", s_active_theme->primary_accent, 2);
 
-    draw_text(50, 120, "THEME ACCESSIBILITY MODE:", s_active_theme->text_primary, 2);
+    draw_text(50, 120, "THEME ACCESSIBILITY MODE:", s_active_theme->text_primary, 1);
     if (s_active_theme->is_high_contrast) {
-        draw_border_rect(320, 110, 220, 40, s_active_theme->primary_accent, s_active_theme->text_primary, 1);
-        draw_text(335, 122, "HIGH CONTRAST [ON]", 0xFF000000, 2);
+        draw_border_rect(280, 110, 220, 35, s_active_theme->primary_accent, s_active_theme->text_primary, 1);
+        draw_text(295, 122, "HIGH CONTRAST [ON]", 0xFF000000, 1);
     } else {
-        draw_border_rect(320, 110, 220, 40, s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
-        draw_text(335, 122, "DARK MODE [ON]", s_active_theme->text_primary, 2);
+        draw_border_rect(280, 110, 220, 35, s_active_theme->card_bg, s_active_theme->secondary_accent, 1);
+        draw_text(295, 122, "DARK MODE [ON]", s_active_theme->text_primary, 1);
     }
 
-    draw_text(50, 180, "INPUT AGNOSTICISM MODE: UNIFIED INPUT GROUP (KEYPAD / TOUCH / CLI)", s_active_theme->text_primary, 1);
-    draw_text(50, 210, "DISPLAY RESOLUTION: 800 x 480 ARGB8888 (LVGL SAFE)", s_active_theme->text_primary, 1);
-    draw_text(50, 240, "SENSOR INGESTION FREQ: 1000 Hz (REAL-TIME ISR)", s_active_theme->text_primary, 1);
-    draw_text(50, 270, "UI PRESENTATION REFRESH: 30 Hz (STALENESS CHECK & PARTIAL REDRAW)", s_active_theme->text_primary, 1);
+    draw_text(50, 170, "INPUT AGNOSTICISM MODE: UNIFIED INPUT GROUP (KEYPAD / TOUCH / CLI)", s_active_theme->text_primary, 1);
+    draw_text(50, 200, "DISPLAY RESOLUTION: 800 x 480 ARGB8888 (LVGL SAFE)", s_active_theme->text_primary, 1);
+    draw_text(50, 230, "SENSOR INGESTION FREQ: 1000 Hz (REAL-TIME ISR)", s_active_theme->text_primary, 1);
+    draw_text(50, 260, "UI PRESENTATION REFRESH: 30 Hz (STALENESS CHECK & PARTIAL REDRAW)", s_active_theme->text_primary, 1);
 
-    draw_border_rect(50, 320, 350, 45, s_active_theme->secondary_accent, s_active_theme->text_primary, 1);
-    draw_text(65, 335, "PRESS [C] TO TOGGLE HIGH CONTRAST", s_active_theme->text_primary, 1);
+    draw_border_rect(50, 310, 360, 45, s_active_theme->secondary_accent, s_active_theme->text_primary, 1);
+    draw_text(131, 328, "PRESS [C] TO TOGGLE HIGH CONTRAST", s_active_theme->text_primary, 1);
 }
 
 static void render_screen_failover(const shared_state_buffer_t *state, const watchdog_supervisor_t *wd)
@@ -439,25 +445,26 @@ static void render_screen_failover(const shared_state_buffer_t *state, const wat
 
     draw_text(180, 65, "HOT STANDBY FAILOVER ENGAGED", 0xFFFFFFFF, 3);
 
-    draw_text(50, 120, "SAFEGUARD TRIPPED / STANDBY ACTIVATED NEAR-ZERO LATENCY FAILOVER", s_active_theme->alarm_critical, 2);
+    draw_text(50, 115, "SAFEGUARD TRIPPED / STANDBY ACTIVATED", s_active_theme->alarm_critical, 1);
+    draw_text(50, 135, "NEAR-ZERO LATENCY FAILOVER MODE ENGAGED", s_active_theme->primary_accent, 1);
 
     char buf[128];
     snprintf(buf, sizeof(buf), "LAST VALID SENSOR TEMP : %.2f C", state->sensor_temp_mC / 1000.0f);
-    draw_text(50, 160, buf, s_active_theme->text_primary, 2);
+    draw_text(50, 175, buf, s_active_theme->text_primary, 2);
 
     snprintf(buf, sizeof(buf), "LAST VALID PRESSURE    : %.1f kPa", state->sensor_pressure_kPa / 10.0f);
-    draw_text(50, 195, buf, s_active_theme->text_primary, 2);
+    draw_text(50, 210, buf, s_active_theme->text_primary, 2);
 
     snprintf(buf, sizeof(buf), "LAST VALID MOTOR RPM   : %lu RPM", (unsigned long)state->sensor_rpm);
-    draw_text(50, 230, buf, s_active_theme->text_primary, 2);
+    draw_text(50, 245, buf, s_active_theme->text_primary, 2);
 
-    draw_text(50, 280, "DUAL-LOOP WATCHDOG STATUS AT FAILOVER:", s_active_theme->primary_accent, 1);
+    draw_text(50, 285, "DUAL-LOOP WATCHDOG STATUS AT FAILOVER:", s_active_theme->primary_accent, 1);
     snprintf(buf, sizeof(buf), "HARDWARE LOOP: %s | SOFTWARE LOOP: %s",
              wd->hw_loop_alive ? "ALIVE" : "FAULTE", wd->sw_loop_alive ? "ALIVE" : "FAULTE");
     draw_text(50, 305, buf, s_active_theme->alarm_critical, 2);
 
-    draw_border_rect(50, 345, 360, 45, s_active_theme->alarm_ok, s_active_theme->text_primary, 1);
-    draw_text(70, 360, "PRESS [F] OR SELECT TO RESTORE PRIMARY HMI", 0xFF000000, 1);
+    draw_border_rect(50, 345, 400, 45, s_active_theme->alarm_ok, s_active_theme->text_primary, 1);
+    draw_text(127, 363, "PRESS [F] OR SELECT TO RESTORE PRIMARY HMI", 0xFF000000, 1);
 }
 
 /* --- Presentation Master Render Dispatch --- */
@@ -499,16 +506,72 @@ static void layer3_render_frame(void)
     layer1_display_flush_cb(&area, s_framebuffer);
 }
 
+static void lvgl_display_flush_cb(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p)
+{
+    (void)disp_drv;
+    display_area_t layer1_area;
+    layer1_area.x1 = area ? area->x1 : 0;
+    layer1_area.y1 = area ? area->y1 : 0;
+    layer1_area.x2 = area ? area->x2 : (DISPLAY_WIDTH - 1);
+    layer1_area.y2 = area ? area->y2 : (DISPLAY_HEIGHT - 1);
+    layer1_area.pixel_color_p = color_p;
+    layer1_display_flush_cb(&layer1_area, color_p);
+    lv_disp_flush_ready(disp_drv);
+}
+
+static void lvgl_indev_read_cb(lv_indev_drv_t * indev_drv, lv_indev_data_t * data)
+{
+    (void)indev_drv;
+    int16_t tx, ty;
+    bool pressed;
+    if (layer1_poll_touch_event(&tx, &ty, &pressed)) {
+        data->point.x = tx;
+        data->point.y = ty;
+        data->state = pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+    }
+}
+
 void layer3_presentation_init(void)
 {
     memset(s_framebuffer, 0, sizeof(s_framebuffer));
     s_active_theme = &s_theme_dark;
-    printf("[LAYER 3 PRESENTATION] LVGL Presentation Engine & Screens Initialized.\n");
+
+    /* Initialize LVGL Core Engine */
+    lv_init();
+
+    /* Setup LVGL Display Draw Buffer */
+    static lv_disp_draw_buf_t draw_buf;
+    lv_disp_draw_buf_init(&draw_buf, s_framebuffer, NULL, DISPLAY_WIDTH * DISPLAY_HEIGHT);
+
+    /* Register LVGL Display Driver */
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.hor_res = DISPLAY_WIDTH;
+    disp_drv.ver_res = DISPLAY_HEIGHT;
+    disp_drv.draw_buf = &draw_buf;
+    disp_drv.flush_cb = lvgl_display_flush_cb;
+    lv_disp_drv_register(&disp_drv);
+
+    /* Register LVGL Unified Input Device Driver */
+    static lv_indev_drv_t indev_drv;
+    lv_indev_drv_init(&indev_drv);
+    indev_drv.type = LV_INDEV_TYPE_POINTER;
+    indev_drv.read_cb = lvgl_indev_read_cb;
+    lv_indev_t * indev = lv_indev_drv_register(&indev_drv);
+
+    lv_group_t * input_group = lv_group_create();
+    lv_indev_set_group(indev, input_group);
+
+    printf("[LAYER 3 PRESENTATION] LVGL Presentation Engine, Drivers & Screens Initialized.\n");
 }
 
 /* 30 Hz UI Timer Tick (Executes rendering, staleness check, software alive heartbeat) */
 void layer3_ui_timer_tick_30hz(void)
 {
+    /* Increment LVGL Ticks & Run LVGL Task Handler */
+    lv_tick_inc(33);
+    lv_task_handler();
+
     /* Always process watchdog tick and software alive heartbeat */
     layer2_watchdog_report_software_alive();
     layer2_watchdog_supervisor_tick();

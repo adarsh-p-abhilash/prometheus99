@@ -1,12 +1,13 @@
 # Prometheus99 Lightweight HMI Runtime Makefile
-# C99 Standard + LVGL Presentation Layer
+# C99 Standard + Native LVGL Presentation Engine
 
 CC ?= C:/msys64/mingw64/bin/gcc.exe
-CFLAGS = -std=c99 -Wall -Wextra -O2 -Iinclude
-LDFLAGS = -lgdi32 -luser32 -lwinmm
+CFLAGS = -std=c99 -Wall -Wextra -Os -s -Iinclude
+LDFLAGS = -Wl,--stack,131072 -lgdi32 -luser32 -lwinmm
 
 TARGET = prometheus99.exe
-SRCS = src/layer0_hardware.c \
+SRCS = src/lvgl.c \
+       src/layer0_hardware.c \
        src/layer1_hal.c \
        src/layer2_core.c \
        src/layer3_presentation.c \

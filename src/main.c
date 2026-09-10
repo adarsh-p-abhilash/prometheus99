@@ -187,8 +187,8 @@ int main(int argc, char *argv[])
 
     printf("[INIT] GUI Window Created (800x480 Resolution).\n");
 
-    /* Launch 1000 Hz Sensor ISR Background Thread */
-    s_isr_thread = (HANDLE)_beginthreadex(NULL, 0, sensor_isr_thread_proc, NULL, 0, NULL);
+    /* Launch 1000 Hz Sensor ISR Background Thread with 32KB stack (RAM optimized) */
+    s_isr_thread = (HANDLE)_beginthreadex(NULL, 32768, sensor_isr_thread_proc, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
     if (!s_isr_thread) {
         fprintf(stderr, "[ERROR] Failed to start 1000 Hz Sensor ISR Thread.\n");
         return 1;
@@ -226,6 +226,12 @@ int main(int argc, char *argv[])
 
             /* Trigger Redraw on Window */
             InvalidateRect(s_hwnd, NULL, FALSE);
+
+            /* Periodically trim OS cached working set pages */
+            static uint32_t frame_count = 0;
+            if (++frame_count % 30 == 0) {
+                SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
+            }
         }
 
         Sleep(5); /* Yield CPU */
