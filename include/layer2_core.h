@@ -2,8 +2,14 @@
  * @file layer2_core.h
  * @brief Layer 2: Core State Management, Serialization, FSM & Watchdog Supervisor
  * 
- * Manages the static binary Shared State Buffer, deterministic finite state machine (FSM),
- * and the Dual-Loop AND Check Watchdog Supervisor.
+ * Changes from original:
+ *   - Removed #pragma pack(push, 1) — fields reordered by descending size
+ *     for natural alignment (prevents ARM BusFault on Cortex-M0/M0+)
+ *   - Added alarm_latch_state to shared state for latching alarm FSM
+ *   - Added lock-free ping-pong buffer (state_exchange_t) for safe
+ *     ISR thread -> UI thread data exchange without mutexes
+ *   - Added telemetry_ring_buffer_t for 60-sample trend history (~720 bytes)
+ *   - Added alarm_journal_t for ISA-18.2 compliant alarm logging (~768 bytes)
  */
 
 #ifndef LAYER2_CORE_H
@@ -11,41 +17,80 @@
 
 #include "config.h"
 
-/* --- Binary Packed Shared State Buffer Structure --- */
-#pragma pack(push, 1)
+/* --- Naturally Aligned Shared State Buffer Structure ---
+ * Fields ordered by descending size to guarantee natural alignment
+ * on all architectures (ARM Cortex-M, x86, RISC-V) without pragma pack.
+ * This enables hardware atomic instructions (LDREX/STREX on ARM) and
+ * prevents unaligned access faults on strict-alignment platforms. */
 typedef struct {
-    uint32_t magic_header;       /* 0x50524F4D ('PROM') */
-    uint64_t timestamp_ms;       /* High-resolution timestamp */
-    uint32_t sensor_temp_mC;     /* Temperature in milli-Celsius (e.g. 42500 = 42.50 C) */
-    uint32_t sensor_pressure_kPa;/* Pressure in kPa (e.g. 1013 = 101.3 kPa) */
-    uint32_t sensor_rpm;         /* Engine/Motor RPM speed */
-    uint32_t sensor_bus_mv;      /* System Bus Voltage in mV (e.g. 24000 = 24.00V) */
-    uint8_t  alarm_severity;     /* Active alarm level (alarm_level_t) */
-    uint8_t  active_screen;      /* Currently active screen ID (screen_id_t) */
-    uint8_t  dirty_flag;         /* 1 = New unread telemetry data available */
-    uint8_t  failover_active;    /* 1 = Hot Standby Failover engaged */
-    uint32_t heartbeat_counter;  /* Telemetry frame counter */
-    uint16_t checksum;           /* 16-bit binary payload checksum */
+    /* 8-byte aligned fields */
+    uint64_t timestamp_ms;        /* High-resolution system timestamp */
+
+    /* 4-byte aligned fields */
+    uint32_t magic_header;        /* 0x50524F4D ('PROM') */
+    uint32_t sensor_temp_mC;      /* Temperature in milli-Celsius */
+    uint32_t sensor_pressure_kPa; /* Pressure in kPa x10 */
+    uint32_t sensor_rpm;          /* Engine/Motor RPM */
+    uint32_t sensor_bus_mv;       /* Bus Voltage in mV */
+    uint32_t heartbeat_counter;   /* Telemetry frame counter */
+
+    /* 2-byte aligned fields */
+    uint16_t checksum;            /* 16-bit payload checksum */
+
+    /* 1-byte aligned fields */
+    uint8_t  alarm_severity;      /* Active alarm level (alarm_level_t) */
+    uint8_t  alarm_latch_state;   /* Alarm latching FSM (alarm_latch_state_t) */
+    uint8_t  active_screen;       /* Currently active screen ID (screen_id_t) */
+    uint8_t  dirty_flag;          /* 1 = New unread telemetry data available */
+    uint8_t  failover_active;     /* 1 = Hot Standby Failover engaged */
+    uint8_t  _pad;                /* Explicit padding for 4-byte alignment */
 } shared_state_buffer_t;
-#pragma pack(pop)
 
 /* --- Watchdog Supervisor Status --- */
 typedef struct {
-    bool hw_loop_alive;
-    bool sw_loop_alive;
     uint64_t last_hw_ping_ms;
     uint64_t last_sw_ping_ms;
     uint32_t total_watchdog_pets;
     uint32_t watchdog_fault_count;
+    bool hw_loop_alive;
+    bool sw_loop_alive;
     bool system_healthy;
 } watchdog_supervisor_t;
+
+/* --- Telemetry Ring Buffer (Static, 60 samples) --- */
+typedef struct {
+    uint32_t temp_mC;
+    uint32_t pressure_kPa;
+    uint32_t rpm;
+    uint32_t bus_mv;
+} telemetry_sample_t;
+
+typedef struct {
+    telemetry_sample_t samples[TREND_HISTORY_SAMPLES]; /* 60 * 16 = 960 bytes */
+    uint16_t head;
+    uint16_t count;
+} telemetry_ring_buffer_t;
+
+/* --- Alarm Journal (Static, 16 entries) --- */
+typedef struct {
+    uint64_t timestamp_ms;
+    uint8_t  severity;         /* alarm_level_t */
+    uint8_t  latch_state;      /* alarm_latch_state_t */
+    char     description[30];  /* Short description */
+} alarm_log_entry_t;
+
+typedef struct {
+    alarm_log_entry_t entries[ALARM_LOG_CAPACITY]; /* 16 * 48 = 768 bytes */
+    uint8_t head;
+    uint8_t count;
+} alarm_journal_t;
 
 /* --- Core Function Declarations --- */
 void layer2_core_init(void);
 
-/* Shared State Management & Binary Serialization */
+/* Shared State Management (Lock-Free ISR -> UI Exchange) */
 void layer2_update_state_binary(uint32_t temp_mC, uint32_t press_kPa, uint32_t rpm, uint32_t bus_mv);
-const shared_state_buffer_t* layer2_get_state_buffer(void);
+void layer2_snapshot_state(shared_state_buffer_t *out);
 bool layer2_consume_dirty_flag(void);
 
 /* FSM Controller */
@@ -57,5 +102,9 @@ void layer2_fsm_process_event(input_key_t key_event);
 void layer2_watchdog_report_software_alive(void);
 void layer2_watchdog_supervisor_tick(void);
 const watchdog_supervisor_t* layer2_get_watchdog_status(void);
+
+/* Telemetry History & Alarm Journal */
+const telemetry_ring_buffer_t* layer2_get_trend_buffer(void);
+const alarm_journal_t* layer2_get_alarm_journal(void);
 
 #endif /* LAYER2_CORE_H */

@@ -1,9 +1,12 @@
 /**
  * @file layer3_presentation.h
- * @brief Layer 3: LVGL Presentation & Pre-Allocated Static Screens
+ * @brief Layer 3: C99 Software Rasterizer & Pre-Allocated Static Screens
  * 
- * Implements LVGL widget presentation, unified input group handling,
- * 30 Hz refresh timer with staleness monitoring, and static screen memory.
+ * Implements widget rendering, unified input group handling,
+ * 30 Hz refresh timer with dirty-rectangle optimization, and static screen memory.
+ *
+ * Changes from original:
+ *   - Renamed from "LVGL Presentation" to "C99 Software Rasterizer" (LVGL not used)
  */
 
 #ifndef LAYER3_PRESENTATION_H
@@ -28,7 +31,7 @@ typedef struct {
 /* --- Function Declarations --- */
 void layer3_presentation_init(void);
 
-/* 30 Hz UI Timer Tick Handler (Executes rendering, polls dirty flag, reports software alive) */
+/* 30 Hz UI Timer Tick Handler (renders, polls input, reports software alive) */
 void layer3_ui_timer_tick_30hz(void);
 
 /* Input Group Processing */

@@ -1,9 +1,18 @@
 # Prometheus99 Lightweight HMI Runtime Makefile
-# C99 Standard + LVGL Presentation Layer
+# C99 Standard + Static Memory Architecture
 
-CC ?= C:/msys64/mingw64/bin/gcc.exe
-CFLAGS = -std=c99 -Wall -Wextra -O2 -Iinclude
-LDFLAGS = -lgdi32 -luser32 -lwinmm
+CC ?= gcc
+
+# -Os: Optimize for size (smaller binary than -O2)
+# -ffunction-sections -fdata-sections: Place each function/data in its own section
+# -DNDEBUG: Disable assert overhead in release builds
+CFLAGS = -std=c99 -Wall -Wextra -Wpedantic -Os -DNDEBUG -Iinclude \
+         -ffunction-sections -fdata-sections
+
+# -Wl,--gc-sections: Strip unreferenced sections at link time (dead code elimination)
+# -s: Strip debug symbols from binary
+# NOTE: No -static flag — dynamic linking against system DLLs keeps binary small
+LDFLAGS = -lgdi32 -luser32 -lwinmm -Wl,--gc-sections -s
 
 TARGET = prometheus99.exe
 SRCS = src/layer0_hardware.c \

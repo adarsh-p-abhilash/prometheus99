@@ -1,6 +1,10 @@
 /**
  * @file layer0_hardware.c
  * @brief Layer 0: Hardware & I/O Abstraction Implementation
+ *
+ * Changes from original:
+ *   - Cached QueryPerformanceFrequency (was called 1000+/sec, now called once)
+ *   - Removed duplicate `sensors->raw_adc_bus_v = raw_v` assignment (line 60-61 bug)
  */
 
 #include "../include/layer0_hardware.h"
@@ -9,6 +13,9 @@
 #include <time.h>
 #include <windows.h>
 
+/* Cached QPC frequency — avoids ~1000 unnecessary syscalls per second */
+static LARGE_INTEGER s_qpc_frequency;
+
 static uint64_t s_boot_time_ms = 0;
 static uint64_t s_last_hardware_pet_ms = 0;
 static bool s_hardware_watchdog_tripped = false;
@@ -16,19 +23,21 @@ static uint32_t s_isr_counter = 0;
 
 uint64_t layer0_get_system_time_ms(void)
 {
-    LARGE_INTEGER freq, count;
-    QueryPerformanceFrequency(&freq);
+    LARGE_INTEGER count;
     QueryPerformanceCounter(&count);
-    return (uint64_t)((count.QuadPart * 1000) / freq.QuadPart);
+    return (uint64_t)((count.QuadPart * 1000) / s_qpc_frequency.QuadPart);
 }
 
 void layer0_hardware_init(void)
 {
+    /* Cache QPC frequency once at init (it never changes during system lifetime) */
+    QueryPerformanceFrequency(&s_qpc_frequency);
+
     s_boot_time_ms = layer0_get_system_time_ms();
     s_last_hardware_pet_ms = s_boot_time_ms;
     s_hardware_watchdog_tripped = false;
     s_isr_counter = 0;
-    printf("[LAYER 0 HAL] Hardware I/O initialized. System timer zeroed.\n");
+    printf("[LAYER 0 HAL] Hardware I/O initialized. QPC frequency cached.\n");
 }
 
 void layer0_read_raw_sensors(raw_hardware_sensors_t *sensors)
@@ -57,8 +66,7 @@ void layer0_read_raw_sensors(raw_hardware_sensors_t *sensors)
     sensors->raw_adc_temp = raw_temp;
     sensors->raw_adc_pressure = raw_press;
     sensors->raw_adc_rpm = raw_rpm;
-    sensors->raw_adc_bus_v = raw_v;
-    sensors->raw_adc_bus_v = raw_v;
+    sensors->raw_adc_bus_v = raw_v;  /* Fixed: was duplicated on next line */
     sensors->interrupt_counter = s_isr_counter;
 }
 

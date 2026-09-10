@@ -5,6 +5,12 @@
  * 
  * Orchestrates pure C99 4-Layer HMI runtime execution, native Win32 windowing,
  * 1000 Hz Sensor ISR thread, 30 Hz UI Presentation Loop, and Dual-Loop Watchdog.
+ *
+ * Changes from original:
+ *   - Action keys (6/F, A, C, arrows, Enter, Esc) routed through Layer 1 HAL queue.
+ *   - Number keys (1-5) do direct screen jumps only (no conflicting queue event).
+ *   - Touch input routed through Layer 1 HAL queue.
+ *   - Proper window class unregistration on shutdown.
  */
 
 #include "../include/config.h"
@@ -23,6 +29,7 @@ static HWND s_hwnd = NULL;
 static BITMAPINFO s_bmi;
 static bool s_running = true;
 static HANDLE s_isr_thread = NULL;
+static const char *S_WND_CLASS = "Prometheus99HMIClass";
 
 /* Win32 Window Callback Handler */
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -48,19 +55,23 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_LBUTTONDOWN: {
             int x = LOWORD(lParam);
             int y = HIWORD(lParam);
-            layer3_handle_touch((int16_t)x, (int16_t)y, true);
+            /* Route through Layer 1 HAL queue */
+            layer1_queue_touch((int16_t)x, (int16_t)y, true);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
 
         case WM_KEYDOWN: {
             switch (wParam) {
+                /* Number keys 1-5: DIRECT screen jumps only.
+                 * Do NOT also queue a HAL navigation event — that would cause
+                 * the FSM to navigate AWAY from the selected screen on the
+                 * next tick (e.g., pressing '2' would go to Dashboard, then
+                 * KEY_NEXT in the queue would move to Diagnostics). */
                 case '1':
-                    layer3_inject_input_key(KEY_PREV);
                     layer2_fsm_request_screen_change(SCREEN_BOOT);
                     break;
                 case '2':
-                    layer3_inject_input_key(KEY_NEXT);
                     layer2_fsm_request_screen_change(SCREEN_DASHBOARD);
                     break;
                 case '3':
@@ -72,27 +83,33 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 case '5':
                     layer2_fsm_request_screen_change(SCREEN_SETTINGS);
                     break;
+
+                /* Action keys: route through Layer 1 HAL queue.
+                 * These are processed by the presentation tick handler
+                 * via layer1_poll_button_event() -> layer3_inject_input_key(). */
                 case '6':
                 case 'F':
-                    layer3_inject_input_key(KEY_TOGGLE_FAILOVER);
+                    layer1_queue_key(KEY_TOGGLE_FAILOVER);
                     break;
                 case 'A':
-                    layer3_inject_input_key(KEY_ALARM_ACK);
+                    layer1_queue_key(KEY_ALARM_ACK);
                     break;
                 case 'C':
-                    layer3_inject_input_key(KEY_TOGGLE_CONTRAST);
+                    layer1_queue_key(KEY_TOGGLE_CONTRAST);
                     break;
+
+                /* Navigation keys: route through Layer 1 HAL queue. */
                 case VK_LEFT:
-                    layer2_fsm_process_event(KEY_PREV);
+                    layer1_queue_key(KEY_PREV);
                     break;
                 case VK_RIGHT:
-                    layer2_fsm_process_event(KEY_NEXT);
+                    layer1_queue_key(KEY_NEXT);
                     break;
                 case VK_RETURN:
-                    layer2_fsm_process_event(KEY_SELECT);
+                    layer1_queue_key(KEY_SELECT);
                     break;
                 case VK_ESCAPE:
-                    layer2_fsm_process_event(KEY_BACK);
+                    layer1_queue_key(KEY_BACK);
                     break;
                 default:
                     break;
@@ -129,7 +146,7 @@ int main(int argc, char *argv[])
     (void)argv;
 
     printf("=================================================================\n");
-    printf("     PROMETHEUS99: LIGHTWEIGHT HMI RUNTIME (C99 + LVGL SAFE)    \n");
+    printf("     PROMETHEUS99: LIGHTWEIGHT HMI RUNTIME (C99 STATIC MEMORY)  \n");
     printf("     Team Doomsday: Abhilash L, Adarsh Abhilash, Nikhil Nuguri  \n");
     printf("=================================================================\n");
     printf("[INIT] Initializing 4-Layer Architecture...\n");
@@ -158,7 +175,7 @@ int main(int argc, char *argv[])
     wc.hInstance = hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    wc.lpszClassName = "Prometheus99HMIClass";
+    wc.lpszClassName = S_WND_CLASS;
     RegisterClassExA(&wc);
 
     /* Calculate Window Rect for exact 800x480 client area */
@@ -167,8 +184,8 @@ int main(int argc, char *argv[])
 
     s_hwnd = CreateWindowExA(
         0,
-        "Prometheus99HMIClass",
-        "Prometheus99: Lightweight HMI Runtime (C99 + LVGL)",
+        S_WND_CLASS,
+        "Prometheus99: Lightweight HMI Runtime (C99 Static Memory)",
         (WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX) | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
         rc.right - rc.left, rc.bottom - rc.top,
@@ -195,7 +212,7 @@ int main(int argc, char *argv[])
     }
 
     printf("[INIT] 1000 Hz Sensor Ingestion Thread Active.\n");
-    printf("[INIT] 30 Hz LVGL UI Presentation Loop Started.\n");
+    printf("[INIT] 30 Hz UI Presentation Loop Started.\n");
     printf("-----------------------------------------------------------------\n");
     printf(" KEYBOARD SHORTCUTS:\n");
     printf("  [1] Boot Screen      [2] System Dashboard   [3] Binary Diagnostics\n");
@@ -221,7 +238,7 @@ int main(int argc, char *argv[])
         if ((now - last_ui_tick) >= UI_FRAME_PERIOD_MS) {
             last_ui_tick = now;
 
-            /* Run 30 Hz LVGL Presentation Tick & Dual-Watchdog Check */
+            /* Run 30 Hz Presentation Tick & Dual-Watchdog Check */
             layer3_ui_timer_tick_30hz();
 
             /* Trigger Redraw on Window */
@@ -236,6 +253,9 @@ int main(int argc, char *argv[])
         WaitForSingleObject(s_isr_thread, 1000);
         CloseHandle(s_isr_thread);
     }
+
+    /* Properly unregister window class */
+    UnregisterClassA(S_WND_CLASS, hInst);
 
     printf("[SHUTDOWN] Prometheus99 HMI Runtime Terminated Safely.\n");
     return 0;
