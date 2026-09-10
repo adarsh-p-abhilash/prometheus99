@@ -14,6 +14,7 @@
 #include "../include/config.h"
 #include "../include/layer0_hardware.h"
 #include "../include/layer1_hal.h"
+#include "../include/layer1_metrics.h"
 #include "../include/layer2_core.h"
 #include "../include/layer3_presentation.h"
 
@@ -27,11 +28,13 @@
 static HWND s_hwnd = NULL;
 static volatile bool s_running = true; /* shared with the 1000 Hz ISR thread */
 static HANDLE s_isr_thread = NULL;
+static HANDLE s_metrics_thread = NULL;
 
 /* --- Display driver state --- */
+/* 4bpp DIB: the colour table is capped at 16 entries by the format itself. */
 static struct {
     BITMAPINFOHEADER header;
-    RGBQUAD          palette[256];
+    RGBQUAD          palette[PALETTE_MAX_SLOTS];
 } s_bmi;
 static HBITMAP s_dib = NULL;
 static HDC     s_memdc = NULL;
@@ -62,11 +65,12 @@ static bool display_init(void)
     memset(&s_bmi, 0, sizeof(s_bmi));
     s_bmi.header.biSize        = sizeof(BITMAPINFOHEADER);
     s_bmi.header.biWidth       = DISPLAY_WIDTH;
-    s_bmi.header.biHeight      = -DISPLAY_HEIGHT; /* Top-down DIB */
+    /* One BAND tall, not one screen tall: this is the partial draw buffer. */
+    s_bmi.header.biHeight      = -DISPLAY_BAND_HEIGHT; /* Top-down DIB */
     s_bmi.header.biPlanes      = 1;
     s_bmi.header.biBitCount    = DISPLAY_COLOR_DEPTH;
     s_bmi.header.biCompression = BI_RGB;
-    s_bmi.header.biClrUsed     = PAL_COUNT;
+    s_bmi.header.biClrUsed     = PALETTE_MAX_SLOTS;
     s_bmi.header.biClrImportant= PAL_COUNT;
 
     s_memdc = CreateCompatibleDC(NULL);
@@ -80,9 +84,16 @@ static bool display_init(void)
     return true;
 }
 
-static void display_present(HDC target)
+/* Registered with Layer 1: pushes one finished band to the window. */
+static HDC s_window_dc = NULL;
+
+static void platform_display_flush(const display_area_t *area, const uint8_t *color_p)
 {
-    BitBlt(target, 0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, s_memdc, 0, 0, SRCCOPY);
+    (void)color_p;   /* the band DIB is already the source surface */
+    if (!s_window_dc) return;
+    BitBlt(s_window_dc, 0, area->y1,
+           DISPLAY_WIDTH, DISPLAY_BAND_HEIGHT,
+           s_memdc, 0, 0, SRCCOPY);
 }
 
 static void display_shutdown(void)
@@ -113,10 +124,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 {
     switch (msg) {
         case WM_PAINT: {
+            /* There is no full-screen backing store to blit from any more, so
+             * validate the region and let the next UI tick (<=33 ms) repaint
+             * every band. */
             PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            display_present(hdc);
+            BeginPaint(hwnd, &ps);
             EndPaint(hwnd, &ps);
+            layer3_request_redraw();
             return 0;
         }
 
@@ -160,10 +174,44 @@ static unsigned __stdcall sensor_isr_thread_proc(void *arg)
     return 0;
 }
 
+/*
+ * Dedicated host-telemetry thread.
+ *
+ * Runs at 4 Hz and lets the provider engine decide which sources are actually
+ * due (500 ms for kernel32 counters, 5 s for the PDH-backed GPU counter). The
+ * Win32 telemetry APIs are called ONLY from here: never from the 1000 Hz ISR,
+ * never from the UI render path.
+ */
+static unsigned __stdcall metrics_thread_proc(void *arg)
+{
+    (void)arg;
+    while (s_running) {
+        layer1_metrics_poll(layer0_get_system_time_ms());
+        Sleep(250);
+    }
+    return 0;
+}
+
+/*
+ * Return cold pages to the OS while the HMI is quiet.
+ *
+ * Because redraws are now gated on quantized change, a steady machine leaves
+ * the 375 KB framebuffer untouched for long stretches. Trimming once per idle
+ * period keeps the resident set near the code+stack floor instead of pinning
+ * the whole framebuffer forever. Private commit is unaffected -- that has a
+ * hard ~2 MB floor from the Win32 GUI subsystem itself.
+ */
+static void trim_working_set(void)
+{
+    SetProcessWorkingSetSizeEx(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1, 0);
+}
+
 int main(int argc, char *argv[])
 {
-    (void)argc;
-    (void)argv;
+    bool want_gpu = false;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--gpu") == 0) want_gpu = true;
+    }
 
     /* Request 1 ms scheduler granularity so Sleep(1) in the sensor thread
      * actually approximates the advertised 1000 Hz cadence (winmm already linked). */
@@ -179,13 +227,19 @@ int main(int argc, char *argv[])
         fprintf(stderr, "[ERROR] Failed to create the 8bpp display surface.\n");
         return 1;
     }
-    printf("[INIT] Display surface: %dx%d @ %d bpp indexed (%d KB).\n",
-           DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_COLOR_DEPTH, DISPLAY_BUF_SIZE / 1024);
+    printf("[INIT] Display %dx%d @ %d bpp indexed; banded draw buffer %d x %d = %d bytes.\n",
+           DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_COLOR_DEPTH,
+           DISPLAY_WIDTH, DISPLAY_BAND_HEIGHT, DISPLAY_BUF_SIZE);
+    printf("[INIT] (a full 4bpp frame would cost %d bytes; %d bands per frame)\n",
+           DISPLAY_FULLFRAME_SIZE, DISPLAY_BAND_COUNT);
 
     /* Initialize Layers */
     layer0_hardware_init();
     layer1_hal_init();
     layer2_core_init();
+    layer1_metrics_enable_gpu(want_gpu);   /* PDH costs ~4.2 MB: opt-in only */
+    layer1_metrics_init();          /* one-shot bounded probe of every provider */
+    layer1_register_display_flush(platform_display_flush);
     layer3_presentation_init(s_pixels);
     display_sync_palette();
 
@@ -237,7 +291,16 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    s_metrics_thread = (HANDLE)_beginthreadex(NULL, 0, metrics_thread_proc, NULL, 0, NULL);
+    if (!s_metrics_thread) {
+        fprintf(stderr, "[ERROR] Failed to start host telemetry thread.\n");
+        display_shutdown();
+        return 1;
+    }
+
     printf("[INIT] 1000 Hz Sensor Ingestion Thread Active.\n");
+    printf("[INIT] Host Telemetry Poll Thread Active (%d ms fast / %d ms slow).\n",
+           METRIC_POLL_PERIOD_MS, METRIC_SLOW_POLL_PERIOD_MS);
     printf("[INIT] 30 Hz LVGL UI Presentation Loop Started.\n");
     printf("-----------------------------------------------------------------\n");
     printf(" KEYBOARD SHORTCUTS:\n");
@@ -253,8 +316,9 @@ int main(int argc, char *argv[])
      * roughly 170 pointless wakeups per second and makes frame pacing exact.
      */
     MSG msg;
-    HDC window_dc = GetDC(s_hwnd);
+    s_window_dc = GetDC(s_hwnd);
     uint64_t next_frame_ms = layer0_get_system_time_ms();
+    uint64_t last_trim_ms = next_frame_ms;
 #ifdef PROM_PROFILE
     uint64_t prof_at = next_frame_ms + 1000;
     unsigned prof_loops = 0, prof_frames = 0, prof_presents = 0;
@@ -294,12 +358,25 @@ int main(int argc, char *argv[])
 #ifdef PROM_PROFILE
             prof_frames++;
 #endif
+            display_sync_palette();
             if (layer3_ui_timer_tick_30hz()) {
-                display_sync_palette();
-                display_present(window_dc);
 #ifdef PROM_PROFILE
                 prof_presents++;
 #endif
+            }
+
+            /*
+             * Periodic working-set trim.
+             *
+             * An idle-gap trigger does not work here: real host CPU load moves
+             * by a whole percent most polls, so the UI legitimately redraws
+             * about twice a second and the process is never "idle" for long.
+             * A fixed cadence keeps the resident set near the code floor for
+             * the cost of a handful of soft faults after each trim.
+             */
+            if ((now - last_trim_ms) >= WORKING_SET_TRIM_PERIOD_MS) {
+                last_trim_ms = now;
+                trim_working_set();
             }
             now = layer0_get_system_time_ms();
         }
@@ -315,8 +392,13 @@ int main(int argc, char *argv[])
         WaitForSingleObject(s_isr_thread, 1000);
         CloseHandle(s_isr_thread);
     }
+    if (s_metrics_thread) {
+        WaitForSingleObject(s_metrics_thread, 2000);
+        CloseHandle(s_metrics_thread);
+    }
+    layer1_metrics_shutdown();   /* releases every LoadLibrary/PDH handle */
 
-    ReleaseDC(s_hwnd, window_dc);
+    ReleaseDC(s_hwnd, s_window_dc);
     display_shutdown();
     timeEndPeriod(1);
 

@@ -36,7 +36,10 @@ void layer1_queue_touch_event(int16_t x, int16_t y, bool pressed);
 bool layer1_poll_button_event(input_key_t *key_out);
 bool layer1_poll_touch_event(int16_t *x, int16_t *y, bool *pressed);
 
-/* Display Flush Callback (called by LVGL rendering engine) */
+/* Display flush. Layer 3 calls the _cb once per rasterized band; the platform
+ * port registers the function that actually pushes those pixels to the panel. */
+typedef void (*display_flush_fn)(const display_area_t *area, const uint8_t *color_p);
+void layer1_register_display_flush(display_flush_fn fn);
 void layer1_display_flush_cb(const display_area_t *area, const uint8_t *color_p);
 
 /* Heartbeat reporter from hardware side */

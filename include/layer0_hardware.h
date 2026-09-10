@@ -11,14 +11,12 @@
 
 #include "config.h"
 
-/* --- Raw Sensor Interface --- */
-typedef struct {
-    uint32_t raw_adc_temp;      /* Raw ADC value for temperature sensor */
-    uint32_t raw_adc_pressure;  /* Raw ADC value for pressure sensor */
-    uint32_t raw_adc_rpm;       /* Pulse counter raw for motor RPM */
-    uint32_t raw_adc_bus_v;     /* Raw ADC value for fieldbus voltage */
-    uint32_t interrupt_counter; /* Total ISR trigger count */
-} raw_hardware_sensors_t;
+/*
+ * NOTE: the synthetic raw_hardware_sensors_t generator that used to live here
+ * has been removed. Telemetry is now real host data produced by the Layer 1
+ * metric providers (see layer1_metrics.h); nothing in the runtime fabricates
+ * a sensor value any more.
+ */
 
 /* --- Raw Hardware Touch Event --- */
 typedef struct {
@@ -29,7 +27,6 @@ typedef struct {
 
 /* --- Function Declarations --- */
 void layer0_hardware_init(void);
-void layer0_read_raw_sensors(raw_hardware_sensors_t *sensors);
 void layer0_read_raw_buttons(uint32_t *raw_gpio_mask);
 void layer0_read_raw_touch(raw_touch_data_t *touch);
 void layer0_pet_hardware_watchdog(void);

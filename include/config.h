@@ -18,10 +18,29 @@
 /* --- Display Specifications --- */
 #define DISPLAY_WIDTH          800
 #define DISPLAY_HEIGHT         480
-#define DISPLAY_COLOR_DEPTH    8      /* 8bpp palettized (indexed) colour */
-/* DIB scanlines are DWORD-aligned; 800 is already a multiple of 4. */
-#define DISPLAY_STRIDE         ((DISPLAY_WIDTH + 3) & ~3)
-#define DISPLAY_BUF_SIZE       (DISPLAY_STRIDE * DISPLAY_HEIGHT)
+#define DISPLAY_COLOR_DEPTH    4      /* 4bpp palettized: 2 pixels per byte  */
+/*
+ * 4bpp packs two pixels into one byte: the EVEN x pixel occupies the high
+ * nibble, the ODD x pixel the low nibble (Windows DIB nibble order).
+ * DIB scanlines are DWORD-aligned; 800/2 = 400 is already a multiple of 4.
+ */
+#define DISPLAY_BYTES_PER_ROW  ((DISPLAY_WIDTH + 1) / 2)
+#define DISPLAY_STRIDE         ((DISPLAY_BYTES_PER_ROW + 3) & ~3)
+#define PALETTE_MAX_SLOTS      16    /* 4bpp hard ceiling; PAL_COUNT must fit */
+
+/*
+ * --- Partial Draw Buffer (banded rendering) ---
+ * There is NO full-screen framebuffer. The logical surface stays 800x480, but
+ * it is rasterized one horizontal band at a time into a single small strip that
+ * is blitted immediately. This is the LVGL partial-draw-buffer model, and it
+ * cuts pixel memory from 187 KB (full 4bpp frame) to under 19 KB.
+ *
+ * DISPLAY_HEIGHT must be an exact multiple of DISPLAY_BAND_HEIGHT.
+ */
+#define DISPLAY_BAND_HEIGHT    48
+#define DISPLAY_BAND_COUNT     (DISPLAY_HEIGHT / DISPLAY_BAND_HEIGHT)
+#define DISPLAY_BUF_SIZE       (DISPLAY_STRIDE * DISPLAY_BAND_HEIGHT)
+#define DISPLAY_FULLFRAME_SIZE (DISPLAY_STRIDE * DISPLAY_HEIGHT) /* for reporting */
 
 /*
  * --- Palette Slots ---
@@ -51,6 +70,26 @@ typedef enum {
 /* --- Watchdog Supervisor Specifications --- */
 #define WATCHDOG_MAX_AGE_MS    500    /* Maximum allowed heartbeat silence before failover */
 #define WATCHDOG_CHECK_PERIOD_MS 100  /* Supervisor dual-loop validation cycle */
+/* The metric poll loop runs at ~2 Hz, so it needs its own (longer) liveness
+ * window; judging it against the 500 ms ISR window would flag it dead always. */
+#define WATCHDOG_METRICS_MAX_AGE_MS 4000
+
+/* --- Host Telemetry Poll Timing (Layer 1 metric provider engine) --- */
+#define METRIC_POLL_PERIOD_MS      500   /* 2 Hz base tick for cheap kernel32 sources */
+#define METRIC_SLOW_POLL_PERIOD_MS 5000  /* 0.2 Hz for PDH/WMI-backed sources */
+#define METRIC_PROBE_TIMEOUT_MS    1500  /* bounded one-shot probe at startup */
+
+/* --- Resident Set Management --- */
+/* Cadence for returning cold pages to the OS. See trim_working_set(). */
+#define WORKING_SET_TRIM_PERIOD_MS 3000
+
+/* --- Trend Graph --- */
+/* One byte per sample per metric: 6 x 96 = 576 bytes of static history. */
+#define METRIC_HISTORY_LEN     96
+#define METRIC_HISTORY_PERIOD_MS 2000  /* graph advances at 0.5 Hz, bounded */
+
+/* --- Alarm Engine --- */
+#define ALARM_EVENT_LOG_DEPTH  8     /* latched edge-triggered events (ring) */
 
 /* --- Pre-Allocated Screen Identifiers --- */
 typedef enum {

@@ -30,7 +30,7 @@ typedef struct {
 } hmi_theme_t;
 
 /* --- Function Declarations --- */
-/* fb points at the PAL_* index plane owned by the display driver (DIB section). */
+/* fb points at the one-band partial draw buffer owned by the display driver. */
 void layer3_presentation_init(uint8_t *fb);
 
 /*
@@ -39,6 +39,10 @@ void layer3_presentation_init(uint8_t *fb);
  * Returns true when the framebuffer changed and the driver should present it.
  */
 bool layer3_ui_timer_tick_30hz(void);
+
+/* Force a full banded repaint on the next tick (e.g. after WM_PAINT, which has
+ * no full-screen backing store to blit from under banded rendering). */
+void layer3_request_redraw(void);
 
 /* Input Group Processing */
 void layer3_inject_input_key(input_key_t key);
@@ -59,7 +63,7 @@ uint32_t layer3_get_palette_revision(void);
 /* Text metrics (advance is 6*scale per glyph, 7*scale tall). */
 int layer3_text_width(const char *str, int scale);
 
-/* Rendering Buffer Access (one PAL_* index per pixel). */
+/* Rendering Buffer Access (the current band; 2 pixels per byte). */
 const uint8_t* layer3_get_framebuffer(void);
 
 #endif /* LAYER3_PRESENTATION_H */

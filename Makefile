@@ -6,11 +6,12 @@
 CC = gcc
 
 # -ffunction-sections/-fdata-sections + --gc-sections drops unreferenced code;
-# -s strips the symbol table (~130 KB of it); -fno-*-unwind-tables removes the
-# C++ EH frames a pure-C freestanding-style app never uses. Result: ~50 KB.
+# -s strips the symbol table; -fno-*-unwind-tables removes the C++ EH frames a
+# pure-C app never uses. -Os beats -O2 by ~20 KB here and the rasterizer has
+# ~30x headroom against the 33 ms frame budget, so size wins. Result: ~51 KB.
 # The only runtime deps are Windows system DLLs (kernel32/user32/gdi32/winmm +
 # the in-box UCRT api-sets), so no separate -static runtime is needed.
-CFLAGS  = -std=c99 -Wall -Wextra -O2 -Iinclude \
+CFLAGS  = -std=c99 -Wall -Wextra -Os -Iinclude \
           -ffunction-sections -fdata-sections \
           -fno-asynchronous-unwind-tables -fno-unwind-tables
 LDFLAGS = -s -Wl,--gc-sections -lgdi32 -luser32 -lwinmm
