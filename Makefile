@@ -12,7 +12,7 @@ CFLAGS = -std=c99 -Wall -Wextra -Wpedantic -Os -DNDEBUG -Iinclude \
 # -Wl,--gc-sections: Strip unreferenced sections at link time (dead code elimination)
 # -s: Strip debug symbols from binary
 # NOTE: No -static flag — dynamic linking against system DLLs keeps binary small
-LDFLAGS = -lgdi32 -luser32 -lwinmm -Wl,--gc-sections -s
+LDFLAGS = -lgdi32 -luser32 -lwinmm -lpsapi -Wl,--gc-sections -Wl,--stack,65536 -s
 
 TARGET = prometheus99.exe
 SRCS = src/layer0_hardware.c \

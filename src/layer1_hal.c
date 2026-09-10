@@ -66,7 +66,7 @@ uint64_t layer1_get_last_hardware_heartbeat_ms(void)
     return s_last_hw_heartbeat_ms;
 }
 
-void layer1_display_flush_cb(const display_area_t *area, const uint32_t *color_p)
+void layer1_display_flush_cb(const display_area_t *area, const uint8_t *color_p)
 {
     (void)area;
     (void)color_p;

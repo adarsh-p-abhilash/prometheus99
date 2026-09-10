@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 echo =================================================================
-echo   Building Prometheus99: Lightweight HMI Runtime (C99 Static)
+echo   Building Prometheus99: Lightweight HMI Runtime (C99 + LVGL)
 echo =================================================================
 
 REM Check if prometheus99.exe is running and stop it to allow overwriting
@@ -14,7 +14,7 @@ if exist "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxili
 )
 
 if defined VCVARS (
-    echo [BUILD] Using MSVC Compiler with Size Optimization...
+    echo [BUILD] Using MSVC Compiler with Size and RAM Optimization...
     call "%VCVARS%" >nul 2>&1
     cl.exe /nologo /O1 /Os /GL /Gy /MD /D_CRT_SECURE_NO_WARNINGS /DNDEBUG /Iinclude ^
         src\layer0_hardware.c ^
@@ -23,7 +23,7 @@ if defined VCVARS (
         src\layer3_presentation.c ^
         src\main.c ^
         /Fe:prometheus99.exe ^
-        /link /OPT:REF /OPT:ICF /LTCG user32.lib gdi32.lib winmm.lib >nul 2>&1
+        /link /OPT:REF /OPT:ICF /LTCG /STACK:65536,16384 /HEAP:131072,16384 user32.lib gdi32.lib winmm.lib psapi.lib >nul 2>&1
     
     if !ERRORLEVEL! EQU 0 (
         del /f /q *.obj >nul 2>&1
@@ -45,8 +45,8 @@ gcc -std=c99 -Wall -Wextra -Wpedantic -Os -DNDEBUG -Iinclude ^
     src/layer3_presentation.c ^
     src/main.c ^
     -o prometheus99.exe ^
-    -lgdi32 -luser32 -lwinmm ^
-    -Wl,--gc-sections -s
+    -lgdi32 -luser32 -lwinmm -lpsapi ^
+    -Wl,--gc-sections -Wl,--stack,65536 -s
 
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Compilation failed with error code %ERRORLEVEL%

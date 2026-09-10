@@ -4,7 +4,7 @@
  * @architect Team Doomsday (Abhilash L, Adarsh Abhilash, Nikhil Nuguri)
  * 
  * Target: Pure C99 Standard
- * Graphics Engine: C99 Software Rasterizer (Static Framebuffer)
+ * Graphics Engine: LVGL Presentation Layer (8-bit Indexed Static Architecture)
  * Architecture: 4-Layer Static Memory HMI Engine
  */
 
@@ -18,7 +18,7 @@
 /* --- Display Specifications --- */
 #define DISPLAY_WIDTH          800
 #define DISPLAY_HEIGHT         480
-#define DISPLAY_COLOR_DEPTH    32     /* ARGB8888 for Win32 GDI target */
+#define DISPLAY_COLOR_DEPTH    8      /* 8-bit Indexed: 375 KB buffer (< 500 KB RAM) */
 #define DISPLAY_BUF_SIZE       (DISPLAY_WIDTH * DISPLAY_HEIGHT)
 
 /* --- Timing Specifications --- */
