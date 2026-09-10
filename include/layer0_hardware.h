@@ -11,13 +11,17 @@
 
 #include "config.h"
 
-/* --- Raw Sensor Interface --- */
+/* --- Raw Sensor & Live Host Hardware Telemetry Interface --- */
 typedef struct {
-    uint32_t raw_adc_temp;      /* Raw ADC value for temperature sensor */
-    uint32_t raw_adc_pressure;  /* Raw ADC value for pressure sensor */
-    uint32_t raw_adc_rpm;       /* Pulse counter raw for motor RPM */
-    uint32_t raw_adc_bus_v;     /* Raw ADC value for fieldbus voltage */
+    uint32_t raw_adc_temp;      /* Live CPU Temperature in millidegrees C (e.g. 45200 = 45.2 C) */
+    uint32_t raw_adc_pressure;  /* Live SSD Read/Write total throughput in KB/s */
+    uint32_t raw_adc_rpm;       /* Live Dynamic Cooling Fan RPM */
+    uint32_t raw_adc_bus_v;     /* Live System CPU Load percentage (0 - 100) */
     uint32_t interrupt_counter; /* Total ISR trigger count */
+    uint16_t cpu_load_pct;      /* Live Host CPU utilization (0 - 100%) */
+    uint16_t ram_load_pct;      /* Live Host RAM utilization (0 - 100%) */
+    uint32_t ssd_read_kb_s;     /* Live SSD Read Throughput in KB/s */
+    uint32_t ssd_write_kb_s;    /* Live SSD Write Throughput in KB/s */
 } raw_hardware_sensors_t;
 
 /* --- Raw Hardware Touch Event --- */
@@ -30,8 +34,6 @@ typedef struct {
 /* --- Function Declarations --- */
 void layer0_hardware_init(void);
 void layer0_read_raw_sensors(raw_hardware_sensors_t *sensors);
-void layer0_read_raw_buttons(uint32_t *raw_gpio_mask);
-void layer0_read_raw_touch(raw_touch_data_t *touch);
 void layer0_pet_hardware_watchdog(void);
 bool layer0_is_hardware_watchdog_tripped(void);
 uint64_t layer0_get_system_time_ms(void);

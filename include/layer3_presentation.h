@@ -41,10 +41,13 @@ void layer3_handle_touch(int16_t x, int16_t y, bool pressed);
 void layer3_toggle_high_contrast_theme(void);
 const hmi_theme_t* layer3_get_current_theme(void);
 
-/* Rendering Buffer Access (8-bit Indexed Color: 375 KB FB) */
+/* Partial Draw Band Rendering (LVGL v8 Standard: 18.75 KB Band Buffer) */
+void layer3_render_all_bands(void);
+
+/* Rendering Buffer Access (4-bit Partial Draw Buffer: 18.75 KB) */
 const uint8_t* layer3_get_framebuffer(void);
 
-/* 256-Color Palette Table (0x00RRGGBB format for Win32 GDI RGBQUAD) */
+/* 16-Color Palette Table (0x00RRGGBB format for Win32 GDI RGBQUAD) */
 const uint32_t* layer3_get_palette(void);
 
 #endif /* LAYER3_PRESENTATION_H */

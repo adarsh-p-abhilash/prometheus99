@@ -4,7 +4,7 @@
  * @architect Team Doomsday (Abhilash L, Adarsh Abhilash, Nikhil Nuguri)
  * 
  * Target: Pure C99 Standard
- * Graphics Engine: LVGL Presentation Layer (8-bit Indexed Static Architecture)
+ * Graphics Engine: LVGL Presentation Layer (4-bit Indexed Static Architecture)
  * Architecture: 4-Layer Static Memory HMI Engine
  */
 
@@ -18,8 +18,11 @@
 /* --- Display Specifications --- */
 #define DISPLAY_WIDTH          800
 #define DISPLAY_HEIGHT         480
-#define DISPLAY_COLOR_DEPTH    8      /* 8-bit Indexed: 375 KB buffer (< 500 KB RAM) */
-#define DISPLAY_BUF_SIZE       (DISPLAY_WIDTH * DISPLAY_HEIGHT)
+#define DISPLAY_COLOR_DEPTH    4      /* 4-bit Indexed: 16-color industrial CLUT */
+#define DISPLAY_ROW_BYTES      (DISPLAY_WIDTH / 2) /* 400 bytes per scanline (DWORD-aligned) */
+#define DISPLAY_BAND_HEIGHT    48     /* 1/10th Partial Draw Band Buffer (Embedded LVGL standard) */
+#define DISPLAY_BAND_COUNT     (DISPLAY_HEIGHT / DISPLAY_BAND_HEIGHT) /* 10 bands */
+#define DISPLAY_BUF_SIZE       (DISPLAY_ROW_BYTES * DISPLAY_BAND_HEIGHT) /* 19,200 bytes (18.75 KB RAM!) */
 
 /* --- Timing Specifications --- */
 #define SENSOR_ISR_FREQ_HZ     1000   /* Layer 1: Sensor & Fieldbus ISR (1000 Hz / 1 ms tick) */

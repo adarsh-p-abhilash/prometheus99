@@ -28,13 +28,17 @@ typedef struct {
 
     /* 4-byte aligned fields */
     uint32_t magic_header;        /* 0x50524F4D ('PROM') */
-    uint32_t sensor_temp_mC;      /* Temperature in milli-Celsius */
-    uint32_t sensor_pressure_kPa; /* Pressure in kPa x10 */
-    uint32_t sensor_rpm;          /* Engine/Motor RPM */
+    uint32_t sensor_temp_mC;      /* Live CPU Temperature in milli-Celsius */
+    uint32_t sensor_pressure_kPa; /* Live SSD Throughput in KB/s */
+    uint32_t sensor_rpm;          /* Live Cooling Fan RPM */
     uint32_t sensor_bus_mv;       /* Bus Voltage in mV */
     uint32_t heartbeat_counter;   /* Telemetry frame counter */
+    uint32_t ssd_read_kb_s;       /* Live SSD Read Throughput in KB/s */
+    uint32_t ssd_write_kb_s;      /* Live SSD Write Throughput in KB/s */
 
     /* 2-byte aligned fields */
+    uint16_t cpu_load_pct;        /* Live Host CPU utilization (0 - 100%) */
+    uint16_t ram_load_pct;        /* Live Host RAM utilization (0 - 100%) */
     uint16_t checksum;            /* 16-bit payload checksum */
 
     /* 1-byte aligned fields */
@@ -89,7 +93,9 @@ typedef struct {
 void layer2_core_init(void);
 
 /* Shared State Management (Lock-Free ISR -> UI Exchange) */
-void layer2_update_state_binary(uint32_t temp_mC, uint32_t press_kPa, uint32_t rpm, uint32_t bus_mv);
+void layer2_update_state_binary(uint32_t temp_mC, uint32_t press_kPa, uint32_t rpm, uint32_t bus_mv,
+                                uint16_t cpu_load_pct, uint16_t ram_load_pct,
+                                uint32_t ssd_read_kb_s, uint32_t ssd_write_kb_s);
 void layer2_snapshot_state(shared_state_buffer_t *out);
 bool layer2_consume_dirty_flag(void);
 

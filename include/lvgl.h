@@ -39,7 +39,7 @@ typedef struct {
     lv_coord_t y;
 } lv_point_t;
 
-/* --- 8-Bit Indexed Color Format (Extreme Embedded Memory: 375 KB FB) --- */
+/* --- 4-Bit Indexed Color Format (Extreme Embedded Memory: 187.5 KB FB) --- */
 #define LV_COLOR_INDEX_BLACK         0
 #define LV_COLOR_INDEX_BG_DARK       1
 #define LV_COLOR_INDEX_CARD_BG       2
@@ -59,11 +59,12 @@ typedef struct {
 
 typedef union {
     struct {
-        uint8_t index;
+        uint8_t index : 4;
     } ch;
     uint8_t full;
 } lv_color_t;
 
+typedef lv_color_t lv_color4_t;
 typedef lv_color_t lv_color8_t;
 typedef lv_color_t lv_color16_t;
 
@@ -88,11 +89,15 @@ static inline lv_color_t lv_color_make(uint8_t r, uint8_t g, uint8_t b)
     if (r >= 0xF0 && g >= 0xF0 && b < 0x20)   { c.full = LV_COLOR_INDEX_YELLOW; return c; }
     if (r == 0xFB && g == 0xBF && b == 0x24) { c.full = LV_COLOR_INDEX_AMBER; return c; }
 
-    /* 6x6x6 color cube fallback for arbitrary colors: 16 + 36*r + 6*g + b */
-    uint8_t ri = (uint8_t)((r * 5 + 127) / 255);
-    uint8_t gi = (uint8_t)((g * 5 + 127) / 255);
-    uint8_t bi = (uint8_t)((b * 5 + 127) / 255);
-    c.full = (uint8_t)(16 + 36 * ri + 6 * gi + bi);
+    /* Nearest color classification in 16-color space */
+    if (r > 200 && g > 200 && b > 200) c.full = LV_COLOR_INDEX_WHITE;
+    else if (r > 150 && g < 50 && b < 50) c.full = LV_COLOR_INDEX_RED;
+    else if (r < 50 && g > 150 && b < 50) c.full = LV_COLOR_INDEX_GREEN;
+    else if (r < 50 && g > 150 && b > 200) c.full = LV_COLOR_INDEX_CYAN;
+    else if (r > 180 && g > 180 && b < 50) c.full = LV_COLOR_INDEX_YELLOW;
+    else if (r > 100 && g > 100 && b > 100) c.full = LV_COLOR_INDEX_GREY;
+    else if (r > 20 || g > 20 || b > 40) c.full = LV_COLOR_INDEX_DARK_GREY;
+    else c.full = LV_COLOR_INDEX_BLACK;
     return c;
 }
 
@@ -106,7 +111,12 @@ static inline lv_color_t lv_color_hex(uint32_t hex)
 
 static inline uint8_t lv_color_to8(lv_color_t c)
 {
-    return c.full;
+    return (uint8_t)(c.full & 0x0F);
+}
+
+static inline uint8_t lv_color_to4(lv_color_t c)
+{
+    return (uint8_t)(c.full & 0x0F);
 }
 
 static inline uint16_t lv_color_to16(lv_color_t c)

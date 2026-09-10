@@ -110,7 +110,9 @@ void layer2_core_init(void)
     printf("[LAYER 2 CORE] Ping-pong state buffer, FSM, trend ring & alarm journal initialized.\n");
 }
 
-void layer2_update_state_binary(uint32_t temp_mC, uint32_t press_kPa, uint32_t rpm, uint32_t bus_mv)
+void layer2_update_state_binary(uint32_t temp_mC, uint32_t press_kPa, uint32_t rpm, uint32_t bus_mv,
+                                uint16_t cpu_load_pct, uint16_t ram_load_pct,
+                                uint32_t ssd_read_kb_s, uint32_t ssd_write_kb_s)
 {
     uint64_t now = layer0_get_system_time_ms();
 
@@ -125,28 +127,32 @@ void layer2_update_state_binary(uint32_t temp_mC, uint32_t press_kPa, uint32_t r
     buf->sensor_pressure_kPa = press_kPa;
     buf->sensor_rpm = rpm;
     buf->sensor_bus_mv = bus_mv;
+    buf->ssd_read_kb_s = ssd_read_kb_s;
+    buf->ssd_write_kb_s = ssd_write_kb_s;
+    buf->cpu_load_pct = cpu_load_pct;
+    buf->ram_load_pct = ram_load_pct;
     buf->heartbeat_counter = s_ping_pong[s_write_idx].heartbeat_counter + 1;
     buf->dirty_flag = 1;
     buf->active_screen = (uint8_t)s_active_screen;
     buf->failover_active = s_ping_pong[s_write_idx].failover_active;
 
     /* --- Alarm Latching State Machine ---
-     * This fixes the critical bug where pressing ACK would be overwritten
-     * within 1 ms by the next ISR threshold check. The latch prevents
-     * re-activation once acknowledged until the condition actually clears. */
-    bool over_threshold = (temp_mC > 60000 || press_kPa > 1300 || bus_mv < 22000);
-    bool warn_threshold = (temp_mC > 52000 || press_kPa > 1200);
+     * Calibrated for Live Host Metrics:
+     * Critical: CPU Temp > 75 C OR System RAM > 95%
+     * Warning:  CPU Temp > 65 C OR CPU Load > 92% OR System RAM > 90% */
+    bool over_threshold = (temp_mC > 75000 || ram_load_pct > 95);
+    bool warn_threshold = (temp_mC > 65000 || cpu_load_pct > 92 || ram_load_pct > 90);
 
     switch (s_alarm_latch) {
         case ALARM_STATE_CLEARED:
             if (over_threshold) {
                 s_alarm_latch = ALARM_STATE_ACTIVE;
                 buf->alarm_severity = (uint8_t)ALARM_CRITICAL;
-                push_alarm_log(now, ALARM_CRITICAL, ALARM_STATE_ACTIVE, "SENSOR OVER-LIMIT");
+                push_alarm_log(now, ALARM_CRITICAL, ALARM_STATE_ACTIVE, "HOST THERMAL/RAM CRITICAL");
             } else if (warn_threshold) {
                 s_alarm_latch = ALARM_STATE_ACTIVE;
                 buf->alarm_severity = (uint8_t)ALARM_WARNING;
-                push_alarm_log(now, ALARM_WARNING, ALARM_STATE_ACTIVE, "SENSOR WARNING");
+                push_alarm_log(now, ALARM_WARNING, ALARM_STATE_ACTIVE, "HOST HIGH LOAD WARNING");
             } else {
                 buf->alarm_severity = (uint8_t)ALARM_NONE;
             }

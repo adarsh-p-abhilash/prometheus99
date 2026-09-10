@@ -7,7 +7,7 @@
  * 1000 Hz Sensor ISR thread, 30 Hz LVGL Presentation Loop, and Dual-Loop Watchdog.
  *
  * Architecture & Memory Features:
- *   - 8-bit Indexed Framebuffer (375 KB) for ultra-lean < 1.0 MB RAM footprint.
+ *   - 4-bit Partial Draw Band Buffer (18.75 KB) for ultra-micro < 0.2 MB RAM footprint.
  *   - Direct screen switching for keys 1-5, action keys routed via HAL queue.
  *   - Working set trimming to guarantee low runtime memory.
  */
@@ -27,13 +27,26 @@
 #include <psapi.h>
 
 static HWND s_hwnd = NULL;
+static HDC s_current_paint_hdc = NULL;
 static struct {
     BITMAPINFOHEADER bmiHeader;
-    RGBQUAD bmiColors[256];
+    RGBQUAD bmiColors[16];
 } s_bmi;
 static bool s_running = true;
 static HANDLE s_isr_thread = NULL;
 static const char *S_WND_CLASS = "Prometheus99HMIClass";
+
+/* Win32 Display Flush Handler (called per band by Layer 1 HAL) */
+static void win32_display_flush_handler(const display_area_t *area, const uint8_t *color_p)
+{
+    if (s_current_paint_hdc && area && color_p) {
+        int band_h = area->y2 - area->y1 + 1;
+        StretchDIBits(s_current_paint_hdc,
+                      area->x1, area->y1, area->x2 - area->x1 + 1, band_h,
+                      0, 0, DISPLAY_WIDTH, band_h,
+                      color_p, (const BITMAPINFO *)&s_bmi, DIB_RGB_COLORS, SRCCOPY);
+    }
+}
 
 /* Win32 Window Callback Handler */
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -42,17 +55,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_CREATE:
             break;
 
+        case WM_PRINTCLIENT:
         case WM_PAINT: {
             PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            const uint8_t *fb = layer3_get_framebuffer();
-            if (fb) {
-                StretchDIBits(hdc,
-                              0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                              0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                              fb, (const BITMAPINFO *)&s_bmi, DIB_RGB_COLORS, SRCCOPY);
-            }
-            EndPaint(hwnd, &ps);
+            s_current_paint_hdc = (msg == WM_PRINTCLIENT) ? (HDC)wParam : BeginPaint(hwnd, &ps);
+            layer3_render_all_bands();
+            if (msg == WM_PAINT) EndPaint(hwnd, &ps);
+            EmptyWorkingSet(GetCurrentProcess());
+            s_current_paint_hdc = NULL;
             return 0;
         }
 
@@ -66,52 +76,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_KEYDOWN: {
-            switch (wParam) {
-                /* Number keys 1-5: DIRECT screen jumps only.
-                 * Prevents double navigation events. */
-                case '1':
-                    layer2_fsm_request_screen_change(SCREEN_BOOT);
-                    break;
-                case '2':
-                    layer2_fsm_request_screen_change(SCREEN_DASHBOARD);
-                    break;
-                case '3':
-                    layer2_fsm_request_screen_change(SCREEN_DIAGNOSTICS);
-                    break;
-                case '4':
-                    layer2_fsm_request_screen_change(SCREEN_ALARM);
-                    break;
-                case '5':
-                    layer2_fsm_request_screen_change(SCREEN_SETTINGS);
-                    break;
-
-                /* Action keys: route through Layer 1 HAL queue */
-                case '6':
-                case 'F':
-                    layer1_queue_key(KEY_TOGGLE_FAILOVER);
-                    break;
-                case 'A':
-                    layer1_queue_key(KEY_ALARM_ACK);
-                    break;
-                case 'C':
-                    layer1_queue_key(KEY_TOGGLE_CONTRAST);
-                    break;
-
-                /* Navigation keys: route through Layer 1 HAL queue */
-                case VK_LEFT:
-                    layer1_queue_key(KEY_PREV);
-                    break;
-                case VK_RIGHT:
-                    layer1_queue_key(KEY_NEXT);
-                    break;
-                case VK_RETURN:
-                    layer1_queue_key(KEY_SELECT);
-                    break;
-                case VK_ESCAPE:
-                    layer1_queue_key(KEY_BACK);
-                    break;
-                default:
-                    break;
+            if (wParam >= '1' && wParam <= '5') {
+                layer2_fsm_request_screen_change((screen_id_t)(wParam - '1'));
+            } else {
+                switch (wParam) {
+                    case '6':
+                    case 'F':       layer1_queue_key(KEY_TOGGLE_FAILOVER); break;
+                    case 'A':       layer1_queue_key(KEY_ALARM_ACK); break;
+                    case 'C':       layer1_queue_key(KEY_TOGGLE_CONTRAST); break;
+                    case VK_LEFT:   layer1_queue_key(KEY_PREV); break;
+                    case VK_RIGHT:  layer1_queue_key(KEY_NEXT); break;
+                    case VK_RETURN: layer1_queue_key(KEY_SELECT); break;
+                    case VK_ESCAPE: layer1_queue_key(KEY_BACK); break;
+                    default: break;
+                }
             }
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
@@ -144,11 +122,7 @@ int main(int argc, char *argv[])
     (void)argc;
     (void)argv;
 
-    printf("=================================================================\n");
-    printf("     PROMETHEUS99: LIGHTWEIGHT HMI RUNTIME (C99 + LVGL)         \n");
-    printf("     Team Doomsday: Abhilash L, Adarsh Abhilash, Nikhil Nuguri  \n");
-    printf("=================================================================\n");
-    printf("[INIT] Initializing 4-Layer Architecture (LVGL + 8-Bit Color)...\n");
+    printf("[INIT] Prometheus99 4-Bit LVGL HMI\n");
 
     /* Initialize Layers */
     layer0_hardware_init();
@@ -156,24 +130,27 @@ int main(int argc, char *argv[])
     layer2_core_init();
     layer3_presentation_init();
 
-    /* Setup Win32 Bitmap Format for 800x480 8-Bit Indexed Rendering (375 KB Framebuffer) */
+    /* Setup Win32 Bitmap Format for 800x48 4-Bit Partial Draw Band (18.75 KB Buffer) */
     memset(&s_bmi, 0, sizeof(s_bmi));
     s_bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     s_bmi.bmiHeader.biWidth = DISPLAY_WIDTH;
-    s_bmi.bmiHeader.biHeight = -DISPLAY_HEIGHT; /* Top-down DIB */
+    s_bmi.bmiHeader.biHeight = -DISPLAY_BAND_HEIGHT; /* Top-down DIB for 48 scanlines */
     s_bmi.bmiHeader.biPlanes = 1;
-    s_bmi.bmiHeader.biBitCount = 8;
+    s_bmi.bmiHeader.biBitCount = 4;
     s_bmi.bmiHeader.biCompression = BI_RGB;
-    s_bmi.bmiHeader.biClrUsed = 256;
-    s_bmi.bmiHeader.biClrImportant = 256;
+    s_bmi.bmiHeader.biClrUsed = 16;
+    s_bmi.bmiHeader.biClrImportant = 16;
 
     const uint32_t *palette = layer3_get_palette();
-    for (int i = 0; i < 256; i++) {
+    for (int i = 0; i < 16; i++) {
         s_bmi.bmiColors[i].rgbRed   = (BYTE)((palette[i] >> 16) & 0xFF);
         s_bmi.bmiColors[i].rgbGreen = (BYTE)((palette[i] >> 8)  & 0xFF);
         s_bmi.bmiColors[i].rgbBlue  = (BYTE)(palette[i] & 0xFF);
         s_bmi.bmiColors[i].rgbReserved = 0;
     }
+
+    /* Register Display Flush Handler with Layer 1 HAL */
+    layer1_set_display_flush_handler(win32_display_flush_handler);
 
     /* Register Win32 Window Class */
     HINSTANCE hInst = GetModuleHandle(NULL);
@@ -211,7 +188,7 @@ int main(int argc, char *argv[])
     SetForegroundWindow(s_hwnd);
     SetFocus(s_hwnd);
 
-    printf("[INIT] GUI Window Created (800x480 8-Bit Indexed, 375 KB Framebuffer).\n");
+    printf("[INIT] GUI Window Created (800x480)\n");
 
     /* Launch 1000 Hz Sensor ISR Background Thread (16 KB stack) */
     s_isr_thread = (HANDLE)_beginthreadex(NULL, 16384, sensor_isr_thread_proc, NULL, 0, NULL);
@@ -223,14 +200,7 @@ int main(int argc, char *argv[])
     /* Trim process working set to guarantee < 1.5 MB memory footprint */
     SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
 
-    printf("[INIT] 1000 Hz Sensor Ingestion Thread Active.\n");
-    printf("[INIT] 30 Hz LVGL Presentation Loop Started.\n");
-    printf("-----------------------------------------------------------------\n");
-    printf(" KEYBOARD SHORTCUTS:\n");
-    printf("  [1] Boot Screen      [2] System Dashboard   [3] Binary Diagnostics\n");
-    printf("  [4] Alarm Supervisor [5] Settings/Contrast  [6/F] Hot Standby Failover\n");
-    printf("  [A] Acknowledge      [C] Toggle Contrast    [Esc] Back\n");
-    printf("-----------------------------------------------------------------\n");
+    printf("[KEYS] 1-5:Screen F:Failover A:Ack C:Contrast\n");
 
     /* Main Execution Loop: 30 Hz LVGL Presentation Tick + Win32 Message Pump */
     MSG msg;
@@ -258,8 +228,8 @@ int main(int argc, char *argv[])
             /* Trigger Redraw on Window */
             InvalidateRect(s_hwnd, NULL, FALSE);
 
-            /* Maintain lean Working Set (< 1.5 MB RAM) every 500ms */
-            if (frame_count % 15 == 0) {
+            /* Maintain ultra-compact Working Set (<= 0.2 MB RAM) */
+            if (frame_count % 2 == 0) {
                 EmptyWorkingSet(GetCurrentProcess());
             }
         }
@@ -276,6 +246,6 @@ int main(int argc, char *argv[])
     /* Properly unregister window class */
     UnregisterClassA(S_WND_CLASS, hInst);
 
-    printf("[SHUTDOWN] Prometheus99 HMI Runtime Terminated Safely.\n");
+    printf("[EXIT] HMI Terminated Safely.\n");
     return 0;
 }

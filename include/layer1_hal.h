@@ -40,6 +40,7 @@ bool layer1_poll_touch_event(int16_t *x, int16_t *y, bool *pressed);
 
 /* Display Flush Callback (called by LVGL rendering engine) */
 void layer1_display_flush_cb(const display_area_t *area, const uint8_t *color_p);
+void layer1_set_display_flush_handler(void (*handler)(const display_area_t *area, const uint8_t *color_p));
 
 /* Heartbeat reporter from hardware side */
 void layer1_report_hardware_alive(void);

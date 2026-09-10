@@ -16,14 +16,14 @@ if exist "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxili
 if defined VCVARS (
     echo [BUILD] Using MSVC Compiler with Size and RAM Optimization...
     call "%VCVARS%" >nul 2>&1
-    cl.exe /nologo /O1 /Os /GL /Gy /MD /D_CRT_SECURE_NO_WARNINGS /DNDEBUG /Iinclude ^
+    cl.exe /nologo /O1 /Os /GL /Gy /GF /Gw /GS- /MD /D_CRT_SECURE_NO_WARNINGS /DNDEBUG /Iinclude ^
         src\layer0_hardware.c ^
         src\layer1_hal.c ^
         src\layer2_core.c ^
         src\layer3_presentation.c ^
         src\main.c ^
         /Fe:prometheus99.exe ^
-        /link /OPT:REF /OPT:ICF /LTCG /STACK:65536,16384 /HEAP:131072,16384 user32.lib gdi32.lib winmm.lib psapi.lib >nul 2>&1
+        /link /OPT:REF /OPT:ICF /LTCG /FIXED /DEBUG:NONE /MERGE:.pdata=.text /STACK:32768,4096 /HEAP:65536,4096 user32.lib gdi32.lib winmm.lib psapi.lib >nul 2>&1
     
     if !ERRORLEVEL! EQU 0 (
         del /f /q *.obj >nul 2>&1

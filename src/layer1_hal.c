@@ -46,7 +46,11 @@ void layer1_sensor_isr_handler_1000hz(void)
         raw.raw_adc_temp,
         raw.raw_adc_pressure,
         raw.raw_adc_rpm,
-        raw.raw_adc_bus_v
+        raw.raw_adc_bus_v,
+        raw.cpu_load_pct,
+        raw.ram_load_pct,
+        raw.ssd_read_kb_s,
+        raw.ssd_write_kb_s
     );
 
     /* Report hardware alive FROM the ISR thread (fixes watchdog dual-loop).
@@ -66,14 +70,18 @@ uint64_t layer1_get_last_hardware_heartbeat_ms(void)
     return s_last_hw_heartbeat_ms;
 }
 
+static void (*s_display_flush_handler)(const display_area_t *area, const uint8_t *color_p) = NULL;
+
+void layer1_set_display_flush_handler(void (*handler)(const display_area_t *area, const uint8_t *color_p))
+{
+    s_display_flush_handler = handler;
+}
+
 void layer1_display_flush_cb(const display_area_t *area, const uint8_t *color_p)
 {
-    (void)area;
-    (void)color_p;
-    /* NOTE: No longer calls layer1_report_hardware_alive() here.
-     * The HW heartbeat is now reported from the ISR thread path above.
-     * This callback runs on the UI thread and must not falsely confirm
-     * that the hardware/sensor path is alive. */
+    if (s_display_flush_handler) {
+        s_display_flush_handler(area, color_p);
+    }
 }
 
 /* --- Input Queue: Push API (called from Win32 WndProc on UI thread) --- */
