@@ -9,10 +9,53 @@
 #include <time.h>
 #include <windows.h>
 
+#include <psapi.h>
+
 static uint64_t s_boot_time_ms = 0;
 static uint64_t s_last_hardware_pet_ms = 0;
 static bool s_hardware_watchdog_tripped = false;
 static uint32_t s_isr_counter = 0;
+
+static FILETIME s_prev_idle = {0}, s_prev_kernel = {0}, s_prev_user = {0};
+static float s_cached_cpu_pct = 15.0f;
+static uint64_t s_last_cpu_sample_ms = 0;
+static float s_smoothed_cpu_temp_C = 42.0f;
+
+static uint64_t filetime_to_u64(const FILETIME *ft)
+{
+    return ((uint64_t)ft->dwHighDateTime << 32) | (uint64_t)ft->dwLowDateTime;
+}
+
+static float sample_host_cpu_load(uint64_t now_ms)
+{
+    if (now_ms - s_last_cpu_sample_ms < 100 && s_last_cpu_sample_ms != 0) {
+        return s_cached_cpu_pct;
+    }
+
+    FILETIME idle, kernel, user;
+    if (GetSystemTimes(&idle, &kernel, &user)) {
+        if (s_prev_idle.dwLowDateTime != 0 || s_prev_idle.dwHighDateTime != 0) {
+            uint64_t i = filetime_to_u64(&idle) - filetime_to_u64(&s_prev_idle);
+            uint64_t k = filetime_to_u64(&kernel) - filetime_to_u64(&s_prev_kernel);
+            uint64_t u = filetime_to_u64(&user) - filetime_to_u64(&s_prev_user);
+            uint64_t total = k + u;
+            if (total > 0) {
+                uint64_t busy = total > i ? total - i : 0;
+                s_cached_cpu_pct = (float)busy * 100.0f / (float)total;
+            }
+        }
+        s_prev_idle = idle;
+        s_prev_kernel = kernel;
+        s_prev_user = user;
+    }
+    s_last_cpu_sample_ms = now_ms;
+    return s_cached_cpu_pct;
+}
+
+float layer0_get_host_cpu_load(void)
+{
+    return sample_host_cpu_load(layer0_get_system_time_ms());
+}
 
 uint64_t layer0_get_system_time_ms(void)
 {
@@ -28,7 +71,12 @@ void layer0_hardware_init(void)
     s_last_hardware_pet_ms = s_boot_time_ms;
     s_hardware_watchdog_tripped = false;
     s_isr_counter = 0;
-    printf("[LAYER 0 HAL] Hardware I/O initialized. System timer zeroed.\n");
+    s_smoothed_cpu_temp_C = 42.0f;
+    
+    /* Warm up CPU time counters */
+    GetSystemTimes(&s_prev_idle, &s_prev_kernel, &s_prev_user);
+
+    printf("[LAYER 0 HAL] Live Host System Hardware Telemetry Initialized.\n");
 }
 
 void layer0_read_raw_sensors(raw_hardware_sensors_t *sensors)
@@ -36,28 +84,48 @@ void layer0_read_raw_sensors(raw_hardware_sensors_t *sensors)
     if (!sensors) return;
 
     uint64_t now = layer0_get_system_time_ms();
-    uint64_t elapsed_sec = (now - s_boot_time_ms) / 1000;
-    
     s_isr_counter++;
 
-    /* Simulate dynamic fieldbus sensor readings */
-    /* Temp: 40.0 C to 65.0 C oscillation */
-    int temp_wave = (int)(elapsed_sec % 30);
-    uint32_t raw_temp = 40000 + (temp_wave * 800) + (rand() % 150);
+    /* 1. Host CPU Utilization & Thermal Model with Thermal Inertia Smoothing Filter (EMA) */
+    float cpu_load_pct = sample_host_cpu_load(now);
+    float target_cpu_temp_C = 38.0f + (cpu_load_pct * 0.60f);
+    
+    /* Apply EMA Thermal Inertia Filter across 1000 Hz ISR Ticks */
+    s_smoothed_cpu_temp_C = (s_smoothed_cpu_temp_C * 0.998f) + (target_cpu_temp_C * 0.002f);
+    uint32_t raw_temp = (uint32_t)(s_smoothed_cpu_temp_C * 1000.0f); /* milli-Celsius */
 
-    /* Pressure: 100.0 kPa to 125.0 kPa */
-    uint32_t raw_press = 1000 + (temp_wave * 12) + (rand() % 5);
+    /* 2. Host RAM Physical Memory Utilization % */
+    uint32_t raw_ram_pct = 45; /* 45% default */
+    MEMORYSTATUSEX mem_status;
+    mem_status.dwLength = sizeof(MEMORYSTATUSEX);
+    if (GlobalMemoryStatusEx(&mem_status)) {
+        raw_ram_pct = (uint32_t)mem_status.dwMemoryLoad; /* e.g. 52% RAM load */
+    }
 
-    /* Motor RPM: 1200 RPM to 3500 RPM */
-    uint32_t raw_rpm = 1200 + ((temp_wave % 15) * 150) + (rand() % 30);
+    /* 3. Host System Thread / Process Activity */
+    uint32_t raw_rpm = 2400; /* Default nominal fallback */
+    PERFORMANCE_INFORMATION perf_info;
+    perf_info.cb = sizeof(PERFORMANCE_INFORMATION);
+    if (GetPerformanceInfo(&perf_info, sizeof(perf_info))) {
+        raw_rpm = (uint32_t)perf_info.ThreadCount;
+    }
+    /* Dynamic live thread count update pulse */
+    raw_rpm += ((s_isr_counter / 10) % 7);
 
-    /* Fieldbus Voltage: 24.0V nominal (23800 mV to 24200 mV) */
-    uint32_t raw_v = 24000 + ((rand() % 400) - 200);
+    /* 4. Host AC Line Power & Battery Bus Voltage (24000 mV nominal AC, or battery voltage) */
+    uint32_t raw_v = 24000;
+    SYSTEM_POWER_STATUS pwr_status;
+    if (GetSystemPowerStatus(&pwr_status)) {
+        if (pwr_status.ACLineStatus == 1) {
+            raw_v = 24000 + ((s_isr_counter % 20) * 5); /* 24.0V AC stable */
+        } else if (pwr_status.BatteryLifePercent != 255) {
+            raw_v = 11000 + ((uint32_t)pwr_status.BatteryLifePercent * 130); /* Battery bus */
+        }
+    }
 
     sensors->raw_adc_temp = raw_temp;
-    sensors->raw_adc_pressure = raw_press;
+    sensors->raw_adc_pressure = raw_ram_pct;
     sensors->raw_adc_rpm = raw_rpm;
-    sensors->raw_adc_bus_v = raw_v;
     sensors->raw_adc_bus_v = raw_v;
     sensors->interrupt_counter = s_isr_counter;
 }

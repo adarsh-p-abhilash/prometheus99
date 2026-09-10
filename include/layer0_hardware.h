@@ -35,5 +35,6 @@ void layer0_read_raw_touch(raw_touch_data_t *touch);
 void layer0_pet_hardware_watchdog(void);
 bool layer0_is_hardware_watchdog_tripped(void);
 uint64_t layer0_get_system_time_ms(void);
+float layer0_get_host_cpu_load(void);
 
 #endif /* LAYER0_HARDWARE_H */

@@ -14,14 +14,14 @@
 
 /* --- High Contrast / Color Palette Theme --- */
 typedef struct {
-    uint32_t bg_color;
-    uint32_t card_bg;
-    uint32_t primary_accent;
-    uint32_t secondary_accent;
-    uint32_t text_primary;
-    uint32_t text_secondary;
-    uint32_t alarm_critical;
-    uint32_t alarm_ok;
+    uint8_t bg_color;
+    uint8_t card_bg;
+    uint8_t primary_accent;
+    uint8_t secondary_accent;
+    uint8_t text_primary;
+    uint8_t text_secondary;
+    uint8_t alarm_critical;
+    uint8_t alarm_ok;
     bool is_high_contrast;
 } hmi_theme_t;
 
@@ -40,6 +40,6 @@ void layer3_toggle_high_contrast_theme(void);
 const hmi_theme_t* layer3_get_current_theme(void);
 
 /* Rendering Buffer Access */
-const uint32_t* layer3_get_framebuffer(void);
+const uint8_t* layer3_get_framebuffer(void);
 
 #endif /* LAYER3_PRESENTATION_H */

@@ -5,8 +5,8 @@ echo =================================================================
 
 set PATH=C:\msys64\mingw64\bin;%PATH%
 
-echo [BUILD] Compiling C99 sources with native LVGL engine (-Os -s -Wl,--stack,131072)...
-gcc -std=c99 -Wall -Wextra -Os -s -Iinclude ^
+echo [BUILD] Compiling C99 sources with size minimization (-Os -s -fno-ident -fno-asynchronous-unwind-tables)...
+gcc -std=c99 -Wall -Wextra -Os -s -fno-ident -fno-asynchronous-unwind-tables -Iinclude ^
     src/lvgl.c ^
     src/layer0_hardware.c ^
     src/layer1_hal.c ^
@@ -14,7 +14,7 @@ gcc -std=c99 -Wall -Wextra -Os -s -Iinclude ^
     src/layer3_presentation.c ^
     src/main.c ^
     -o prometheus99.exe ^
-    -Wl,--stack,131072 ^
+    -Wl,--stack,16384 ^
     -lgdi32 -luser32 -lwinmm
 
 if %ERRORLEVEL% NEQ 0 (

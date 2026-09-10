@@ -81,12 +81,11 @@ or double-click `Run_HMI_Runtime.bat`.
 
 | Key | Action |
 | :--- | :--- |
-| **`1`** | Navigates to **Boot Screen** (System progress bar & initialization checklist) |
-| **`2`** | Navigates to **Dashboard Screen** (Live gauges for Temp, Pressure, RPM, Voltage) |
-| **`3`** | Navigates to **Diagnostics Screen** (Inspect raw hex binary telemetry packet, CRC16, & memory audit) |
-| **`4`** | Navigates to **Alarm Screen** (Active trip condition monitor & safety controls) |
-| **`5`** | Navigates to **Settings Screen** (HMI refresh specs & accessibility options) |
-| **`6` / `F`** | Toggles **Hot Standby Failover Mode** |
+| **`1`** | Navigates to **Dashboard Screen** (Live gauges for Temp, Pressure, RPM, Voltage) |
+| **`2`** | Navigates to **Diagnostics Screen** (Inspect raw hex binary telemetry packet, CRC16, & memory audit) |
+| **`3`** | Navigates to **Alarm Screen** (Active trip condition monitor & safety controls) |
+| **`4`** | Navigates to **Settings Screen** (HMI refresh specs & accessibility options) |
+| **`5` / `F`** | Toggles **Hot Standby Failover Mode** |
 | **`A`** | Acknowledges active alarms |
 | **`C`** | Toggles between Dark HMI Mode & High Contrast Accessible Mode |
 | **Mouse Click** | Touch digitizer navigation on bottom HMI tabs |

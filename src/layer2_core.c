@@ -14,8 +14,8 @@ static shared_state_buffer_t s_shared_state_buffer;
 static watchdog_supervisor_t s_watchdog_supervisor;
 
 /* Static FSM state */
-static screen_id_t s_active_screen = SCREEN_BOOT;
-static screen_id_t s_previous_screen = SCREEN_BOOT;
+static screen_id_t s_active_screen = SCREEN_DASHBOARD;
+static screen_id_t s_previous_screen = SCREEN_DASHBOARD;
 
 /* Binary CRC16 / Checksum calculation for data integrity */
 static uint16_t compute_binary_checksum(const uint8_t *data, size_t len)
@@ -27,13 +27,18 @@ static uint16_t compute_binary_checksum(const uint8_t *data, size_t len)
     return sum;
 }
 
+static bool s_alarm_acknowledged_by_user = false;
+static bool s_prev_alarm_state = false;
+static uint64_t s_init_time_ms = 0;
+static uint64_t s_last_audio_beep_ms = 0;
+
 void layer2_core_init(void)
 {
     memset(&s_shared_state_buffer, 0, sizeof(s_shared_state_buffer));
     memset(&s_watchdog_supervisor, 0, sizeof(s_watchdog_supervisor));
 
     s_shared_state_buffer.magic_header = 0x50524F4D; /* 'PROM' */
-    s_shared_state_buffer.active_screen = (uint8_t)SCREEN_BOOT;
+    s_shared_state_buffer.active_screen = (uint8_t)SCREEN_DASHBOARD;
     s_shared_state_buffer.dirty_flag = 1;
     s_shared_state_buffer.heartbeat_counter = 0;
 
@@ -43,11 +48,17 @@ void layer2_core_init(void)
     s_watchdog_supervisor.last_hw_ping_ms = layer0_get_system_time_ms();
     s_watchdog_supervisor.last_sw_ping_ms = layer0_get_system_time_ms();
 
-    s_active_screen = SCREEN_BOOT;
-    s_previous_screen = SCREEN_BOOT;
+    s_active_screen = SCREEN_DASHBOARD;
+    s_previous_screen = SCREEN_DASHBOARD;
+    s_alarm_acknowledged_by_user = false;
+    s_prev_alarm_state = false;
+    s_init_time_ms = layer0_get_system_time_ms();
 
-    printf("[LAYER 2 CORE] Static Shared State Buffer & FSM Controller initialized.\n");
+    printf("[LAYER 2 CORE] Static Shared State Buffer & FSM Controller initialized to Dashboard Screen.\n");
 }
+
+#include <windows.h>
+#include <mmsystem.h>
 
 void layer2_update_state_binary(uint32_t temp_mC, uint32_t press_kPa, uint32_t rpm, uint32_t bus_mv)
 {
@@ -61,13 +72,34 @@ void layer2_update_state_binary(uint32_t temp_mC, uint32_t press_kPa, uint32_t r
     s_shared_state_buffer.heartbeat_counter++;
     s_shared_state_buffer.dirty_flag = 1;
 
-    /* Check alarm thresholds */
-    if (temp_mC > 60000 || press_kPa > 1300 || bus_mv < 22000) {
+    bool is_alarm_active = (temp_mC > 45000 || press_kPa > 85 || bus_mv < 22000);
+    uint64_t elapsed_since_init = now - s_init_time_ms;
+
+    /* 1. Auto-switch to SCREEN_ALARM & Critical Severity evaluation */
+    if (is_alarm_active) {
         s_shared_state_buffer.alarm_severity = (uint8_t)ALARM_CRITICAL;
-    } else if (temp_mC > 52000 || press_kPa > 1200) {
-        s_shared_state_buffer.alarm_severity = (uint8_t)ALARM_WARNING;
+        if (elapsed_since_init > 2000 && !s_alarm_acknowledged_by_user) {
+            if (s_active_screen != SCREEN_ALARM && s_active_screen != SCREEN_FAILOVER_STANDBY) {
+                layer2_fsm_request_screen_change(SCREEN_ALARM);
+            }
+        }
     } else {
+        s_alarm_acknowledged_by_user = false; /* Reset ack flag when temp normalizes */
         s_shared_state_buffer.alarm_severity = (uint8_t)ALARM_NONE;
+    }
+    s_prev_alarm_state = is_alarm_active;
+
+    /* 2. Continuous Loud Sound Alarm (Plays every 300 ms through Windows Sound Card until temp < 45.0 C) */
+    if (temp_mC > 45000) {
+        if ((now - s_last_audio_beep_ms) >= 300) {
+            s_last_audio_beep_ms = now;
+            MessageBeep(0xFFFFFFFF); /* Standard Windows Master Sound Alert */
+            MessageBeep(MB_ICONHAND);
+            MessageBeep(MB_OK);
+            PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
+            Beep(2000, 100);
+            Beep(1200, 100);
+        }
     }
 
     /* Update binary payload checksum */
@@ -131,18 +163,15 @@ void layer2_fsm_process_event(input_key_t key_event)
     }
 
     if (key_event == KEY_ALARM_ACK) {
+        s_alarm_acknowledged_by_user = true;
         s_shared_state_buffer.alarm_severity = (uint8_t)ALARM_NONE;
-        printf("[LAYER 2 FSM] Alarm Acknowledged by User Key.\n");
+        layer2_fsm_request_screen_change(SCREEN_DASHBOARD);
+        printf("[LAYER 2 FSM] Alarm Acknowledged. Transitioned to Dashboard Screen.\n");
         return;
     }
 
     /* Screen-specific state navigation */
     switch (s_active_screen) {
-        case SCREEN_BOOT:
-            if (key_event == KEY_SELECT || key_event == KEY_NEXT) {
-                layer2_fsm_request_screen_change(SCREEN_DASHBOARD);
-            }
-            break;
 
         case SCREEN_DASHBOARD:
             if (key_event == KEY_NEXT) {

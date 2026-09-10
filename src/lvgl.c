@@ -126,6 +126,22 @@ void lv_bar_set_range(lv_obj_t * bar, int32_t min, int32_t max) { (void)bar; (vo
 
 lv_obj_t * lv_btn_create(lv_obj_t * parent) { return lv_obj_create(parent); }
 
+static lv_chart_series_t s_static_series;
+static int16_t s_chart_points[60];
+
+lv_obj_t * lv_chart_create(lv_obj_t * parent) { return lv_obj_create(parent); }
+void lv_chart_set_type(lv_obj_t * obj, lv_chart_type_t type) { (void)obj; (void)type; }
+lv_chart_series_t * lv_chart_add_series(lv_obj_t * chart, lv_color_t color, uint8_t axis)
+{
+    (void)chart;
+    (void)axis;
+    s_static_series.color = color;
+    s_static_series.points = s_chart_points;
+    return &s_static_series;
+}
+void lv_chart_set_next_value(lv_obj_t * chart, lv_chart_series_t * ser, int16_t value) { (void)chart; (void)ser; (void)value; }
+void lv_chart_set_point_count(lv_obj_t * obj, uint16_t cnt) { (void)obj; (void)cnt; }
+
 uint32_t lv_task_handler(void)
 {
     if (s_active_indev_drv && s_active_indev_drv->read_cb) {
