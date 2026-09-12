@@ -18,22 +18,14 @@ All user constraints have been strictly surpassed:
 ### 1. Live Host Hardware Dashboard
 Real-time monitoring of host CPU thermals, CPU & RAM utilization, cooling fan speed, physical SSD read/write throughput, 60-second thermal trend graph, and ISA-18.2 supervisory alarm status.
 
-![Live Host Dashboard](C:\Users\nikhi\.gemini\antigravity-ide\brain\d7e8a868-4153-4cde-a3c3-5dd7bab7e247\dashboard_live_host.png)
-
 ### 2. Live Host Diagnostics & Memory Profiler
 Static memory budget breakdown confirming 0 B heap usage, 18.75 KB LVGL band buffer, and host system ingestion diagnostics.
-
-![Host Diagnostics](C:\Users\nikhi\.gemini\antigravity-ide\brain\d7e8a868-4153-4cde-a3c3-5dd7bab7e247\diagnostics_screen.png)
 
 ### 3. ISA-18.2 Latching Alarm Supervisor
 Real-time supervisory latching state machine monitoring host trip thresholds (**CPU Temp $\ge 55^\circ\text{C}$** OR **CPU Load $\ge 80\%$**). Whenever the host crosses or reaches either trip point, the runtime triggers a **continuous looping audio alarm** that plays non-stop until the operator acknowledges it via `[A]` or the touch interface.
 
-![Alarm Supervisor](C:\Users\nikhi\.gemini\antigravity-ide\brain\d7e8a868-4153-4cde-a3c3-5dd7bab7e247\alarm_screen.png)
-
 ### 4. Settings & Accessibility
-HMI runtime configuration and single-key high-contrast theme toggle for outdoor or high-glare industrial environments.
-
-![Settings Screen](C:\Users\nikhi\.gemini\antigravity-ide\brain\d7e8a868-4153-4cde-a3c3-5dd7bab7e247\settings_screen.png)
+HMI runtime configuration and single-key high-contrast theme toggle for outdoor or high-glare industrial environme
 
 ---
 
@@ -45,8 +37,8 @@ HMI runtime configuration and single-key high-contrast theme toggle for outdoor 
 | **Display Buffer Concept** | Full 800×480 | Full 800×480 | Full 800×480 | **10 Bands × 48 Scanlines** | Embedded LVGL Standard |
 | **Display Buffer RAM** | 1,536,000 B (1.54 MB) | 768,000 B (750 KB) | 192,000 B (187.5 KB) | **19,200 B (18.75 KB)** | **98.8% Buffer RAM Reduction** |
 | **Total Static RAM (BSS)** | ~1.55 MB | ~770 KB | ~196 KB | **~21.5 KB (0.021 MB)** | **Fits easily in 32 KB MCU SRAM** |
-| **Runtime Private WS (RAM)**| **2.70 MB** | 0.89 MB | 0.35 MB | **0.10 MB (106 KB)** | ✅ **MET: =< 0.2 MB (96.3% lower)** |
-| **Executable Size on Disk** | 281,735 B (275 KB) | 30,720 B (30.0 KB) | 31,232 B (30.5 KB) | **30,208 B (29.50 KB)** | ✅ **MET: <= 30 KB (89.3% lower)** |
+| **Runtime Private WS (RAM)**| **2.70 MB** | 0.89 MB | 0.35 MB | **0.10 MB (106 KB)** | =< 0.2 MB (96.3% lower)** |
+| **Executable Size on Disk** | 281,735 B (275 KB) | 30,720 B (30.0 KB) | 31,232 B (30.5 KB) | **30,208 B (29.50 KB)** | <= 30 KB (89.3% lower)** |
 | **Dynamic Allocations (`malloc`)** | 0 bytes | 0 bytes | 0 bytes | **0 bytes** | **100% Deterministic** |
 
 ---
