@@ -8,9 +8,9 @@
 
 ### An ultra-lightweight industrial HMI runtime — 0.10 MB RAM, 30 KB binary, zero heap
 
-Prometheus99 is a bare-metal-optimized Human-Machine Interface runtime for industrial control panels, built from scratch in pure C99 on the LVGL v8 partial-draw architecture. It replaces the 150 MB–1.2 GB working sets of Qt/Electron/WinCC-based HMIs with a **102 KB** footprint and a **30,720-byte** executable — small enough to boot from a serial SPI flash chip and run on microcontroller-class SRAM instead of external DRAM.
+**Prometheus99** is a bare-metal-optimized Human-Machine Interface runtime for industrial control panels, built from scratch in pure C99 on the LVGL v8 partial-draw architecture. It replaces the 150 MB–1.2 GB working sets of Qt/Electron/WinCC-based HMIs with a **102 KB** footprint and a **30,720-byte** executable — small enough to boot from a serial SPI flash chip and run on microcontroller-class SRAM instead of external DRAM.
 
-Built for the **Schneider Electric Hackathon — PS4: Lightweight HMI Runtime** by **Team Doomsday**.
+Built by **Team Doomsday** for the **Smart HMI Innovation Marathon by Schneider Electric**.
 
 ---
 
@@ -156,8 +156,8 @@ Real hardware. CPU load via `GetSystemTimes`, SSD throughput via a direct handle
 
 ## Team
 
-**Team Doomsday** — Abhilash L, Adarsh Abhilash, Nikhil Nuguri
-Built for the Schneider Electric Hackathon, Problem Statement PS4 (Lightweight HMI Runtime).
+**Team Doomsday** — Abhilash L, Adarsh P Abhilash, Nikhil Nuguri
+Built for the Smart HMI Innovation Marathon by Schneider Electric, under Problem Statement 4 — Lightweight HMI Runtime.
 
 ## License
 
